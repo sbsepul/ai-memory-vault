@@ -64,7 +64,7 @@ def _ensure_vault_local(vault_repo: str) -> Path:
 def _decode_claude_slug(slug: str) -> str:
     """
     Convert a Claude project directory slug back to a relative path from $HOME.
-    e.g. '-home-sbsepul-repos-dream-home' -> 'repos/dream-home'
+    e.g. '-home-alice-repos-dream-home' -> 'repos/dream-home'
     """
     abs_path = slug.replace("-", "/").lstrip("/")
     home_str = str(_HOME).lstrip("/")

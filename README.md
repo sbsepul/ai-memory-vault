@@ -72,7 +72,7 @@ vault tree --source codex
 ┃ Project (rel. to ~)        ┃ Git ┃ Claude      ┃ Codex        ┃ Total msgs ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
 │ repos/dream-home           │ ✅  │ 9s / 2383m  │ 16s / 2190m  │       4573 │
-│ work/falabella/backend     │ ✅  │ 12s / 4210m │ 87s / 9841m  │      14051 │
+│ work/my-company/backend    │ ✅  │ 12s / 4210m │ 87s / 9841m  │      14051 │
 │ Downloads/analysis         │ ❌  │ -           │ 7s / 51m     │         51 │
 └────────────────────────────┴─────┴─────────────┴──────────────┴────────────┘
 ```
@@ -84,7 +84,7 @@ List sessions for a specific project.
 
 ```bash
 vault ls --project dream-home
-vault ls --project falabella --source codex --limit 20
+vault ls --project my-company --source codex --limit 20
 ```
 
 ### `vault search`
@@ -93,7 +93,7 @@ Full-text search across all sessions.
 ```bash
 vault search "authentication middleware"
 vault search "docker compose" --source codex
-vault search "migration" --project falabella --limit 5
+vault search "migration" --project my-company --limit 5
 ```
 
 ### `vault export`
@@ -115,7 +115,7 @@ Output structure mirrors `source/project_rel_path/`:
 │       ├── 20260115-1430_37825382.md
 │       └── 20260203-0912_54da0e24.md
 └── codex/
-    └── work/falabella/backend/
+    └── work/my-company/backend/
         └── 20260601-1219_019e83fc.md
 ```
 

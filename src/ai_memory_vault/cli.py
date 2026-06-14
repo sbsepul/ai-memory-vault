@@ -13,6 +13,7 @@ from rich.panel import Panel
 
 from .extractors import claude as claude_ext
 from .extractors import codex as codex_ext
+from .extractors.codex_memory import extract_memories as extract_codex_memories
 from .exporters.markdown import export_sessions
 from .tree import build_tree
 from .search import search as do_search
@@ -403,3 +404,60 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run:
                     f"restored to [cyan]{claude_projects}[/cyan]\n"
                     "[dim]Restart Claude Code to pick up the restored sessions.[/dim]"
                 )
+
+
+# ── memories ──────────────────────────────────────────────────────────────────
+
+@main.command("memories")
+@click.option("--project", "-p", default=None, help="Filter by project path (partial match).")
+@click.option("--output", "-o", default=None, type=click.Path(),
+              help="Export memories to a Markdown file instead of printing.")
+@click.option("--limit", "-n", default=50, show_default=True)
+def cmd_memories(project: str | None, output: str | None, limit: int):
+    """Show Codex auto-generated memory summaries (from ~/.codex/memories_1.sqlite).
+
+    \b
+    Codex silently builds condensed memory notes per session and stores them
+    in SQLite — not in the JSONL session files. This command surfaces them.
+    These are the most condensed, high-value notes about your past work.
+    """
+    with console.status("[bold green]Reading Codex memories…"):
+        memories = extract_codex_memories()
+
+    if project:
+        memories = [m for m in memories if project.lower() in m.project_rel_path.lower()]
+
+    memories = memories[:limit]
+
+    if not memories:
+        console.print("[yellow]No Codex memories found.[/yellow]")
+        return
+
+    if output:
+        lines = [f"# Codex Memories\n\nTotal: {len(memories)}\n\n---\n"]
+        for m in memories:
+            ts = m.generated_at.strftime("%Y-%m-%d %H:%M UTC") if m.generated_at else "?"
+            lines.append(f"## {m.thread_title or m.thread_id[:8]}")
+            lines.append(f"- **Project**: `{m.project_rel_path}`")
+            lines.append(f"- **Generated**: {ts}  |  **Used**: {m.usage_count}x\n")
+            if m.rollout_summary:
+                lines.append(f"**Summary**\n\n{m.rollout_summary}\n")
+            if m.raw_memory:
+                lines.append(f"**Full memory**\n\n{m.raw_memory}\n")
+            lines.append("---\n")
+        Path(output).write_text("\n".join(lines), encoding="utf-8")
+        console.print(f"[green]✓ {len(memories)} memories exported[/green] → [cyan]{output}[/cyan]")
+        return
+
+    console.print(f"[bold]{len(memories)} Codex memory summaries[/bold]\n")
+    for m in memories:
+        ts = m.generated_at.strftime("%Y-%m-%d") if m.generated_at else "?"
+        header = (
+            f"[green]{m.project_rel_path}[/green]  "
+            f"[dim]{ts}  used {m.usage_count}x[/dim]  "
+            f"[bold]{m.thread_title or m.thread_id[:8]}[/bold]"
+        )
+        body = (m.rollout_summary or m.raw_memory or "")[:400]
+        if len(m.rollout_summary or m.raw_memory or "") > 400:
+            body += "…"
+        console.print(Panel(body, title=header, title_align="left", padding=(0, 1)))

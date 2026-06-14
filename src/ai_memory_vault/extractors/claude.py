@@ -15,12 +15,12 @@ _CLAUDE_PROJECTS = _HOME / ".claude" / "projects"
 def _decode_project_path(slug: str) -> str:
     """
     Claude encodes the absolute path as a directory name by replacing '/' with '-'.
-    e.g. '-home-sbsepul-repos-dream-home' -> relative path 'repos/dream-home'
+    e.g. '-home-alice-repos-dream-home' -> relative path 'repos/dream-home'
     We strip the home prefix and return a path relative to $HOME.
     """
     # The slug starts with '-home-<username>-' or '-Users-<username>-'
     abs_path = slug.replace("-", "/").lstrip("/")
-    home_str = str(_HOME).lstrip("/")  # e.g. 'home/sbsepul'
+    home_str = str(_HOME).lstrip("/")  # e.g. 'home/alice'
     if abs_path.startswith(home_str):
         rel = abs_path[len(home_str):].lstrip("/")
         return rel or "home"
