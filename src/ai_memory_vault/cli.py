@@ -729,4 +729,37 @@ def cmd_init(project: str, remote: bool, private: bool):
             f"\n[red]GitHub repo creation failed.[/red] "
             f"Try manually:\n  gh repo create {repo_name} {visibility} --source . --push"
         )
-        console.print(t)
+
+
+@main.command()
+@click.option("--port", default=8080, show_default=True, help="Port to listen on.")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Host to bind to.")
+@click.option("--no-browser", is_flag=True, default=False, help="Skip opening browser automatically.")
+def serve(port, host, no_browser):
+    """Launch local web UI for browsing AI history."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            "[red]uvicorn is required for vault serve.[/red]\n"
+            "Install with:  pip install uvicorn"
+        )
+        sys.exit(1)
+
+    from .server.app import app as web_app
+
+    url = f"http://{host}:{port}"
+    console.print(Panel(
+        f"[bold]AI Memory Vault — Web UI[/bold]\n\n"
+        f"[dim]Open:[/dim] [link={url}][blue]{url}[/blue][/link]\n\n"
+        f"Press [bold]Ctrl+C[/bold] to stop.",
+        border_style="blue",
+        expand=False,
+    ))
+
+    if not no_browser:
+        import threading
+        import webbrowser
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+
+    uvicorn.run(web_app, host=host, port=port, log_level="warning")
