@@ -27,6 +27,9 @@ console = Console()
 DEFAULT_OUTPUT = Path.home() / "ai-memory-vault-export"
 
 
+_HOME = Path.home()
+
+
 def _apply_map_to_sessions(sessions, path_map: dict) -> list:
     if not path_map:
         return sessions
@@ -34,6 +37,7 @@ def _apply_map_to_sessions(sessions, path_map: dict) -> list:
         canonical = apply_path_map(s.project_rel_path, path_map)
         if canonical != s.project_rel_path:
             s.project_rel_path = canonical
+            s.has_git = (_HOME / canonical / ".git").exists()
     return sessions
 
 SOURCE_OPTION = click.option(
