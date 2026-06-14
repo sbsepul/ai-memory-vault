@@ -1,8 +1,7 @@
 """Extract sessions from Claude Code CLI (~/.claude/projects/)."""
 from __future__ import annotations
 import json
-import re
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from .models import Message, Session
@@ -12,18 +11,25 @@ _HOME = Path.home()
 _CLAUDE_PROJECTS = _HOME / ".claude" / "projects"
 
 
-def _decode_project_path(slug: str) -> str:
+def _rel_path_from_cwd(cwd: str) -> str:
+    """Strip $HOME prefix to get a portable relative path."""
+    home_str = str(_HOME)
+    if cwd.startswith(home_str):
+        return cwd[len(home_str):].lstrip("/") or "home"
+    return cwd.lstrip("/")
+
+
+def _rel_path_from_slug(slug: str) -> str:
     """
-    Claude encodes the absolute path as a directory name by replacing '/' with '-'.
-    e.g. '-home-alice-repos-dream-home' -> relative path 'repos/dream-home'
-    We strip the home prefix and return a path relative to $HOME.
+    Fallback: decode the Claude project directory slug when no cwd is found in
+    the session file. Claude encodes '/' as '-', so this is ambiguous for
+    directory names that contain hyphens — prefer cwd when available.
+    e.g. '-home-alice-repos-dream-home' -> 'repos/dream-home'
     """
-    # The slug starts with '-home-<username>-' or '-Users-<username>-'
     abs_path = slug.replace("-", "/").lstrip("/")
-    home_str = str(_HOME).lstrip("/")  # e.g. 'home/alice'
+    home_str = str(_HOME).lstrip("/")
     if abs_path.startswith(home_str):
-        rel = abs_path[len(home_str):].lstrip("/")
-        return rel or "home"
+        return abs_path[len(home_str):].lstrip("/") or "home"
     return abs_path
 
 
@@ -35,7 +41,8 @@ def _parse_message(event: dict) -> Message | None:
             raw = content.get("content", "")
             if isinstance(raw, list):
                 text = " ".join(
-                    p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text"
+                    p.get("text", "") for p in raw
+                    if isinstance(p, dict) and p.get("type") == "text"
                 )
             else:
                 text = str(raw)
@@ -51,7 +58,8 @@ def _parse_message(event: dict) -> Message | None:
             raw = content.get("content", "")
             if isinstance(raw, list):
                 text = " ".join(
-                    p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text"
+                    p.get("text", "") for p in raw
+                    if isinstance(p, dict) and p.get("type") == "text"
                 )
             else:
                 text = str(raw)
@@ -64,8 +72,7 @@ def _parse_message(event: dict) -> Message | None:
     return None
 
 
-def _parse_session_file(jsonl_path: Path, project_rel_path: str) -> Session | None:
-    lines = []
+def _parse_session_file(jsonl_path: Path, slug_rel_path: str) -> Session | None:
     try:
         lines = jsonl_path.read_text(errors="replace").splitlines()
     except OSError:
@@ -77,6 +84,7 @@ def _parse_session_file(jsonl_path: Path, project_rel_path: str) -> Session | No
     messages: list[Message] = []
     started_at: datetime | None = None
     updated_at: datetime | None = None
+    cwd_rel_path: str | None = None  # set from the first event that has cwd
 
     for raw in lines:
         raw = raw.strip()
@@ -86,6 +94,13 @@ def _parse_session_file(jsonl_path: Path, project_rel_path: str) -> Session | No
             event = json.loads(raw)
         except json.JSONDecodeError:
             continue
+
+        # Use the first cwd we find as the authoritative project path.
+        # This avoids the ambiguity in slug decoding (hyphens vs slashes).
+        if cwd_rel_path is None:
+            raw_cwd = event.get("cwd")
+            if raw_cwd:
+                cwd_rel_path = _rel_path_from_cwd(raw_cwd)
 
         ts_raw = event.get("timestamp")
         ts = None
@@ -108,14 +123,14 @@ def _parse_session_file(jsonl_path: Path, project_rel_path: str) -> Session | No
     if not messages:
         return None
 
-    session_id = jsonl_path.stem
-    name = project_rel_path.split("/")[-1] if project_rel_path else session_id
-
-    git_dir = (_HOME / project_rel_path / ".git") if project_rel_path else Path("/nonexistent")
+    # cwd from events is authoritative; slug decoding is the fallback
+    project_rel_path = cwd_rel_path or slug_rel_path
+    name = project_rel_path.split("/")[-1] if project_rel_path else jsonl_path.stem
+    git_dir = _HOME / project_rel_path / ".git"
     has_git = git_dir.exists()
 
     return Session(
-        id=session_id,
+        id=jsonl_path.stem,
         source="claude",
         project_rel_path=project_rel_path,
         name=name,
@@ -128,7 +143,7 @@ def _parse_session_file(jsonl_path: Path, project_rel_path: str) -> Session | No
 
 
 def extract_all(claude_dir: Path = _CLAUDE_PROJECTS) -> list[Session]:
-    """Return all Claude Code sessions, each with a relative project path."""
+    """Return all Claude Code sessions with accurate relative project paths."""
     sessions: list[Session] = []
 
     if not claude_dir.exists():
@@ -137,9 +152,9 @@ def extract_all(claude_dir: Path = _CLAUDE_PROJECTS) -> list[Session]:
     for project_dir in sorted(claude_dir.iterdir()):
         if not project_dir.is_dir():
             continue
-        rel_path = _decode_project_path(project_dir.name)
+        slug_fallback = _rel_path_from_slug(project_dir.name)
         for jsonl_file in sorted(project_dir.glob("*.jsonl")):
-            session = _parse_session_file(jsonl_file, rel_path)
+            session = _parse_session_file(jsonl_file, slug_fallback)
             if session:
                 sessions.append(session)
 
