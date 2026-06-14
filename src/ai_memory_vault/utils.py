@@ -1,5 +1,7 @@
 """Shared utility functions used across extractors and commands."""
+
 from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
 
@@ -14,7 +16,7 @@ def rel_path_from_cwd(cwd: str) -> str:
     """
     home_str = str(HOME)
     if cwd.startswith(home_str):
-        return cwd[len(home_str):].lstrip("/") or "home"
+        return cwd[len(home_str) :].lstrip("/") or "home"
     return cwd.lstrip("/")
 
 

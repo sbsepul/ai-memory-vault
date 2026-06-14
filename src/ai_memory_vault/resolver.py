@@ -15,25 +15,48 @@ The resolved mapping is persisted to
 ~/.config/ai-memory-vault/path-map.json so it survives between runs and
 can be hand-edited if needed.
 """
+
 from __future__ import annotations
+
 import json
 import re
 import subprocess
 from pathlib import Path
 
 from .config import (
-    HOME, PATH_MAP_FILE, CONFIG_DIR,
-    GIT_REMOTE_TIMEOUT_S, RESOLVER_MIN_NAME_LEN, RESOLVER_SIMILARITY_GAP,
+    CONFIG_DIR,
+    GIT_REMOTE_TIMEOUT_S,
+    HOME,
+    PATH_MAP_FILE,
+    RESOLVER_MIN_NAME_LEN,
+    RESOLVER_SIMILARITY_GAP,
 )
 
-
 # Names too generic to match confidently
-_SKIP_NAMES = {"home", "repos", "work", "src", "app", "api", "web", "data",
-               "backend", "frontend", "claude", "downloads", "skills",
-               "personal", "universal", "platform", "services", "packages"}
+_SKIP_NAMES = {
+    "home",
+    "repos",
+    "work",
+    "src",
+    "app",
+    "api",
+    "web",
+    "data",
+    "backend",
+    "frontend",
+    "claude",
+    "downloads",
+    "skills",
+    "personal",
+    "universal",
+    "platform",
+    "services",
+    "packages",
+}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _normalize_name(name: str) -> str:
     """'dream-home', 'dream_home', 'Dream Home' → 'dreamhome'"""
@@ -51,8 +74,10 @@ def _git_remote(repo_path: Path) -> str | None:
     try:
         r = subprocess.run(
             ["git", "remote", "get-url", "origin"],
-            capture_output=True, text=True,
-            cwd=repo_path, timeout=GIT_REMOTE_TIMEOUT_S,
+            capture_output=True,
+            text=True,
+            cwd=repo_path,
+            timeout=GIT_REMOTE_TIMEOUT_S,
         )
         return r.stdout.strip() or None
     except Exception:
@@ -74,6 +99,7 @@ def _path_similarity(a: str, b: str) -> float:
 
 # ── remote index ──────────────────────────────────────────────────────────────
 
+
 def _build_remote_index(disk_repos: set[str]) -> dict[str, str]:
     """Return {normalized_remote: rel_path} for all disk repos that have a remote."""
     index: dict[str, str] = {}
@@ -85,6 +111,7 @@ def _build_remote_index(disk_repos: set[str]) -> dict[str, str]:
 
 
 # ── main resolver ─────────────────────────────────────────────────────────────
+
 
 def resolve_orphans(
     orphan_paths: set[str],
@@ -150,6 +177,7 @@ def resolve_orphans(
 
 
 # ── persistence ───────────────────────────────────────────────────────────────
+
 
 def load_path_map() -> dict[str, str]:
     if PATH_MAP_FILE.exists():

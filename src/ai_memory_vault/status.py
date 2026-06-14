@@ -1,11 +1,13 @@
 """Cross-reference repos on disk against AI conversation history."""
+
 from __future__ import annotations
+
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
-from .config import HOME, DEFAULT_SEARCH_DIRS, DEFAULT_SEARCH_DEPTH
-from .extractors.models import Session
+from .config import DEFAULT_SEARCH_DEPTH, DEFAULT_SEARCH_DIRS, HOME
+from .domain.models import Session
+from .domain.status import StatusReport
 
 
 def _find_git_repos(search_dirs: list[Path], max_depth: int) -> set[str]:
@@ -14,71 +16,14 @@ def _find_git_repos(search_dirs: list[Path], max_depth: int) -> set[str]:
         if not base.exists():
             continue
         result = subprocess.run(
-            ["find", str(base), "-maxdepth", str(max_depth),
-             "-name", ".git", "-type", "d"],
-            capture_output=True, text=True,
+            ["find", str(base), "-maxdepth", str(max_depth), "-name", ".git", "-type", "d"],
+            capture_output=True,
+            text=True,
         )
         for line in result.stdout.splitlines():
             rel = str(Path(line).parent.relative_to(HOME))
             repos.add(rel)
     return repos
-
-
-@dataclass
-class StatusReport:
-    disk_repos: set[str]
-    ai_paths: set[str]
-
-    @property
-    def with_history(self) -> set[str]:
-        """Repos on disk that also have AI history."""
-        return self.disk_repos & self.ai_paths
-
-    @property
-    def no_history(self) -> set[str]:
-        """Repos on disk with zero AI history."""
-        return self.disk_repos - self.ai_paths
-
-    @property
-    def orphan(self) -> set[str]:
-        """AI history pointing to paths that no longer exist as git repos on disk."""
-        return self.ai_paths - self.disk_repos
-
-    @property
-    def orphan_exists_no_git(self) -> set[str]:
-        """Orphan paths that exist on disk with files but have no .git,
-        excluding parent directories of git repos or of other orphan paths
-        (those would end up as repos-containing-repos, which is not useful)."""
-        result = set()
-        for p in self.orphan:
-            full = HOME / p
-            if full.exists() and not (full / ".git").exists():
-                if any(r.startswith(p + "/") for r in self.disk_repos):
-                    continue
-                if any(o.startswith(p + "/") for o in self.orphan if o != p):
-                    continue
-                result.add(p)
-        return result
-
-    @property
-    def orphan_missing(self) -> set[str]:
-        """Orphan paths whose directory doesn't exist on disk at all."""
-        return {p for p in self.orphan if not (HOME / p).exists()}
-
-    def orphan_stats(self, sessions: list[Session]) -> dict[str, tuple[int, int]]:
-        """Return {rel_path: (n_sessions, n_messages)} for orphan paths."""
-        stats: dict[str, tuple[int, int]] = {}
-        for path in self.orphan:
-            matched = [s for s in sessions if s.project_rel_path == path]
-            stats[path] = (len(matched), sum(s.message_count for s in matched))
-        return stats
-
-    def with_history_stats(self, sessions: list[Session]) -> dict[str, tuple[int, int]]:
-        stats: dict[str, tuple[int, int]] = {}
-        for path in self.with_history:
-            matched = [s for s in sessions if s.project_rel_path == path]
-            stats[path] = (len(matched), sum(s.message_count for s in matched))
-        return stats
 
 
 def build_status(

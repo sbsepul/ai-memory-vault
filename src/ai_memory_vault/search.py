@@ -1,18 +1,12 @@
 """Full-text search across extracted sessions."""
+
 from __future__ import annotations
+
 import re
-from dataclasses import dataclass
 
 from .config import SNIPPET_CONTEXT_CHARS
-from .extractors.models import Session, Message
-
-
-@dataclass
-class SearchHit:
-    session: Session
-    message: Message
-    snippet: str       # excerpt with match context
-    match_index: int   # byte position of match in message content
+from .domain.models import Session
+from .domain.search import SearchHit
 
 
 def search(
@@ -42,11 +36,13 @@ def search(
                 snippet = "…" + snippet
             if end < len(msg.content):
                 snippet = snippet + "…"
-            hits.append(SearchHit(
-                session=session,
-                message=msg,
-                snippet=snippet,
-                match_index=m.start(),
-            ))
+            hits.append(
+                SearchHit(
+                    session=session,
+                    message=msg,
+                    snippet=snippet,
+                    match_index=m.start(),
+                )
+            )
 
     return hits
