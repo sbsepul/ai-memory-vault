@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .config import SNIPPET_CONTEXT_CHARS
 from .extractors.models import Session, Message
 
 
@@ -10,8 +11,8 @@ from .extractors.models import Session, Message
 class SearchHit:
     session: Session
     message: Message
-    snippet: str          # excerpt with match highlighted
-    match_index: int      # position of match in message content
+    snippet: str       # excerpt with match context
+    match_index: int   # byte position of match in message content
 
 
 def search(
@@ -34,8 +35,8 @@ def search(
             m = pattern.search(msg.content)
             if not m:
                 continue
-            start = max(0, m.start() - 80)
-            end = min(len(msg.content), m.end() + 80)
+            start = max(0, m.start() - SNIPPET_CONTEXT_CHARS)
+            end = min(len(msg.content), m.end() + SNIPPET_CONTEXT_CHARS)
             snippet = msg.content[start:end].replace("\n", " ")
             if start > 0:
                 snippet = "…" + snippet

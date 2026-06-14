@@ -5,71 +5,46 @@ from datetime import datetime
 from pathlib import Path
 
 from .models import Message, Session
-
-
-_HOME = Path.home()
-_CLAUDE_PROJECTS = _HOME / ".claude" / "projects"
-
-
-def _rel_path_from_cwd(cwd: str) -> str:
-    """Strip $HOME prefix to get a portable relative path."""
-    home_str = str(_HOME)
-    if cwd.startswith(home_str):
-        return cwd[len(home_str):].lstrip("/") or "home"
-    return cwd.lstrip("/")
+from ..config import HOME, CLAUDE_PROJECTS_DIR
+from ..utils import rel_path_from_cwd, parse_iso_timestamp
 
 
 def _rel_path_from_slug(slug: str) -> str:
-    """
-    Fallback: decode the Claude project directory slug when no cwd is found in
-    the session file. Claude encodes '/' as '-', so this is ambiguous for
-    directory names that contain hyphens — prefer cwd when available.
+    """Fallback: decode a Claude project directory slug to a relative path.
+
+    Claude encodes '/' as '-', so decoding is ambiguous for directory names
+    that contain hyphens — prefer the cwd field from JSONL events when available.
     e.g. '-home-alice-repos-dream-home' -> 'repos/dream-home'
     """
     abs_path = slug.replace("-", "/").lstrip("/")
-    home_str = str(_HOME).lstrip("/")
+    home_str = str(HOME).lstrip("/")
     if abs_path.startswith(home_str):
         return abs_path[len(home_str):].lstrip("/") or "home"
     return abs_path
 
 
+def _extract_text(content) -> str:
+    """Flatten a Claude message content field to plain text."""
+    if isinstance(content, dict):
+        raw = content.get("content", "")
+        if isinstance(raw, list):
+            return " ".join(
+                p.get("text", "") for p in raw
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        return str(raw)
+    return str(content)
+
+
 def _parse_message(event: dict) -> Message | None:
     msg_type = event.get("type")
-    if msg_type == "user":
-        content = event.get("message", {})
-        if isinstance(content, dict):
-            raw = content.get("content", "")
-            if isinstance(raw, list):
-                text = " ".join(
-                    p.get("text", "") for p in raw
-                    if isinstance(p, dict) and p.get("type") == "text"
-                )
-            else:
-                text = str(raw)
-        else:
-            text = str(content)
-        ts_raw = event.get("timestamp")
-        ts = datetime.fromisoformat(ts_raw) if ts_raw else None
-        return Message(role="user", content=text.strip(), timestamp=ts)
+    if msg_type not in ("user", "assistant"):
+        return None
 
-    if msg_type == "assistant":
-        content = event.get("message", {})
-        if isinstance(content, dict):
-            raw = content.get("content", "")
-            if isinstance(raw, list):
-                text = " ".join(
-                    p.get("text", "") for p in raw
-                    if isinstance(p, dict) and p.get("type") == "text"
-                )
-            else:
-                text = str(raw)
-        else:
-            text = str(content)
-        ts_raw = event.get("timestamp")
-        ts = datetime.fromisoformat(ts_raw) if ts_raw else None
-        return Message(role="assistant", content=text.strip(), timestamp=ts)
-
-    return None
+    role = msg_type
+    text = _extract_text(event.get("message", {}))
+    ts = parse_iso_timestamp(event["timestamp"]) if event.get("timestamp") else None
+    return Message(role=role, content=text.strip(), timestamp=ts)
 
 
 def _parse_session_file(jsonl_path: Path, slug_rel_path: str) -> Session | None:
@@ -84,7 +59,7 @@ def _parse_session_file(jsonl_path: Path, slug_rel_path: str) -> Session | None:
     messages: list[Message] = []
     started_at: datetime | None = None
     updated_at: datetime | None = None
-    cwd_rel_path: str | None = None  # set from the first event that has cwd
+    cwd_rel_path: str | None = None
 
     for raw in lines:
         raw = raw.strip()
@@ -95,21 +70,13 @@ def _parse_session_file(jsonl_path: Path, slug_rel_path: str) -> Session | None:
         except json.JSONDecodeError:
             continue
 
-        # Use the first cwd we find as the authoritative project path.
-        # This avoids the ambiguity in slug decoding (hyphens vs slashes).
+        # First cwd seen is authoritative — avoids slug-decode ambiguity
         if cwd_rel_path is None:
             raw_cwd = event.get("cwd")
             if raw_cwd:
-                cwd_rel_path = _rel_path_from_cwd(raw_cwd)
+                cwd_rel_path = rel_path_from_cwd(raw_cwd)
 
-        ts_raw = event.get("timestamp")
-        ts = None
-        if ts_raw:
-            try:
-                ts = datetime.fromisoformat(ts_raw)
-            except ValueError:
-                pass
-
+        ts = parse_iso_timestamp(event["timestamp"]) if event.get("timestamp") else None
         if ts:
             if started_at is None or ts < started_at:
                 started_at = ts
@@ -123,11 +90,9 @@ def _parse_session_file(jsonl_path: Path, slug_rel_path: str) -> Session | None:
     if not messages:
         return None
 
-    # cwd from events is authoritative; slug decoding is the fallback
     project_rel_path = cwd_rel_path or slug_rel_path
     name = project_rel_path.split("/")[-1] if project_rel_path else jsonl_path.stem
-    git_dir = _HOME / project_rel_path / ".git"
-    has_git = git_dir.exists()
+    has_git = (HOME / project_rel_path / ".git").exists()
 
     return Session(
         id=jsonl_path.stem,
@@ -138,11 +103,10 @@ def _parse_session_file(jsonl_path: Path, slug_rel_path: str) -> Session | None:
         updated_at=updated_at,
         messages=messages,
         has_git=has_git,
-        original_abs_path=str(_HOME / project_rel_path),
     )
 
 
-def extract_all(claude_dir: Path = _CLAUDE_PROJECTS) -> list[Session]:
+def extract_all(claude_dir: Path = CLAUDE_PROJECTS_DIR) -> list[Session]:
     """Return all Claude Code sessions with accurate relative project paths."""
     sessions: list[Session] = []
 

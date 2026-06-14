@@ -89,9 +89,9 @@ vault summary --source claude
 
 | Source | Sessions | Messages | Projects |
 |--------|----------|----------|----------|
-| Claude Code | 65 | 20,541 | 12 |
-| Codex | 763 | 49,642 | 75 |
-| **Total** | **828** | **70,183** | **85** |
+| Claude Code | 120 | 18,340 | 22 |
+| Codex | 430 | 31,200 | 48 |
+| **Total** | **550** | **49,540** | **58** |
 
 ---
 
@@ -104,10 +104,10 @@ vault tree --source codex
 
 | Project (rel. to ~) | Git | Claude | Codex | Msgs |
 |---|:---:|---|---|---:|
-| repos/my-project | ✅ | 9s / 2383m | 16s / 2190m | 4,573 |
-| work/backend | ✅ | 12s / 4210m | 87s / 9841m | 14,051 |
-| Downloads/notes | 📂 | — | 7s / 51m | 51 |
-| old/renamed-dir | ❌ | 3s / 104m | — | 104 |
+| repos/web-app | ✅ | 14s / 3100m | 8s / 1200m | 4,300 |
+| repos/api-service | ✅ | 6s / 980m | 22s / 4100m | 5,080 |
+| Downloads/scratch-notes | 📂 | — | 3s / 41m | 41 |
+| repos/old-prototype | ❌ | 2s / 88m | — | 88 |
 
 **Git column legend:**
 

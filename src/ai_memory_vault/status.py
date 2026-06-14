@@ -1,15 +1,14 @@
 """Cross-reference repos on disk against AI conversation history."""
 from __future__ import annotations
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
+from .config import HOME, DEFAULT_SEARCH_DIRS, DEFAULT_SEARCH_DEPTH
 from .extractors.models import Session
 
-_HOME = Path.home()
 
-
-def _find_git_repos(search_dirs: list[Path], max_depth: int = 5) -> set[str]:
+def _find_git_repos(search_dirs: list[Path], max_depth: int) -> set[str]:
     repos: set[str] = set()
     for base in search_dirs:
         if not base.exists():
@@ -20,7 +19,7 @@ def _find_git_repos(search_dirs: list[Path], max_depth: int = 5) -> set[str]:
             capture_output=True, text=True,
         )
         for line in result.stdout.splitlines():
-            rel = str(Path(line).parent.relative_to(_HOME))
+            rel = str(Path(line).parent.relative_to(HOME))
             repos.add(rel)
     return repos
 
@@ -52,7 +51,7 @@ class StatusReport:
         (those would end up as repos-containing-repos, which is not useful)."""
         result = set()
         for p in self.orphan:
-            full = _HOME / p
+            full = HOME / p
             if full.exists() and not (full / ".git").exists():
                 if any(r.startswith(p + "/") for r in self.disk_repos):
                     continue
@@ -64,7 +63,7 @@ class StatusReport:
     @property
     def orphan_missing(self) -> set[str]:
         """Orphan paths whose directory doesn't exist on disk at all."""
-        return {p for p in self.orphan if not (_HOME / p).exists()}
+        return {p for p in self.orphan if not (HOME / p).exists()}
 
     def orphan_stats(self, sessions: list[Session]) -> dict[str, tuple[int, int]]:
         """Return {rel_path: (n_sessions, n_messages)} for orphan paths."""
@@ -85,10 +84,10 @@ class StatusReport:
 def build_status(
     sessions: list[Session],
     search_dirs: list[Path] | None = None,
-    max_depth: int = 5,
+    max_depth: int = DEFAULT_SEARCH_DEPTH,
 ) -> StatusReport:
     if search_dirs is None:
-        search_dirs = [_HOME / "repos", _HOME / "work"]
+        search_dirs = DEFAULT_SEARCH_DIRS
 
     disk_repos = _find_git_repos(search_dirs, max_depth)
     ai_paths = {s.project_rel_path for s in sessions}

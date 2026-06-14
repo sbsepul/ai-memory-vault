@@ -21,9 +21,16 @@ import re
 import subprocess
 from pathlib import Path
 
-_HOME = Path.home()
-_CONFIG_DIR = _HOME / ".config" / "ai-memory-vault"
-_PATH_MAP_FILE = _CONFIG_DIR / "path-map.json"
+from .config import (
+    HOME, PATH_MAP_FILE, CONFIG_DIR,
+    GIT_REMOTE_TIMEOUT_S, RESOLVER_MIN_NAME_LEN, RESOLVER_SIMILARITY_GAP,
+)
+
+
+# Names too generic to match confidently
+_SKIP_NAMES = {"home", "repos", "work", "src", "app", "api", "web", "data",
+               "backend", "frontend", "claude", "downloads", "skills",
+               "personal", "universal", "platform", "services", "packages"}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -35,10 +42,7 @@ def _normalize_name(name: str) -> str:
 
 def _normalize_remote(url: str) -> str:
     """Strip protocol/host/user and .git suffix → bare repo name."""
-    url = url.strip()
-    # git@github.com:user/repo.git  or  https://github.com/user/repo.git
-    url = re.sub(r"\.git$", "", url)
-    # keep only the last two path components: user/repo
+    url = re.sub(r"\.git$", "", url.strip())
     parts = re.split(r"[:/]", url)
     return "/".join(parts[-2:]).lower() if len(parts) >= 2 else url.lower()
 
@@ -47,7 +51,8 @@ def _git_remote(repo_path: Path) -> str | None:
     try:
         r = subprocess.run(
             ["git", "remote", "get-url", "origin"],
-            capture_output=True, text=True, cwd=repo_path, timeout=3,
+            capture_output=True, text=True,
+            cwd=repo_path, timeout=GIT_REMOTE_TIMEOUT_S,
         )
         return r.stdout.strip() or None
     except Exception:
@@ -55,7 +60,7 @@ def _git_remote(repo_path: Path) -> str | None:
 
 
 def _path_similarity(a: str, b: str) -> float:
-    """Fraction of path components shared (from right to left)."""
+    """Fraction of path components shared from right to left."""
     pa = a.strip("/").split("/")
     pb = b.strip("/").split("/")
     shared = 0
@@ -73,19 +78,13 @@ def _build_remote_index(disk_repos: set[str]) -> dict[str, str]:
     """Return {normalized_remote: rel_path} for all disk repos that have a remote."""
     index: dict[str, str] = {}
     for rel in disk_repos:
-        remote = _git_remote(_HOME / rel)
+        remote = _git_remote(HOME / rel)
         if remote:
             index[_normalize_remote(remote)] = rel
     return index
 
 
 # ── main resolver ─────────────────────────────────────────────────────────────
-
-# Names too generic to match confidently
-_SKIP_NAMES = {"home", "repos", "work", "src", "app", "api", "web", "data",
-               "backend", "frontend", "claude", "downloads", "skills",
-               "personal", "universal", "platform", "services", "packages"}
-
 
 def resolve_orphans(
     orphan_paths: set[str],
@@ -98,13 +97,13 @@ def resolve_orphans(
     Conservative rules — we prefer false negatives over false positives:
       1. Git remote URL of a named candidate matches the orphan name exactly.
       2. Exactly one disk repo has the same normalized last component AND
-         the normalized name is specific enough (len ≥ 5 chars).
+         the normalized name is specific enough (len ≥ RESOLVER_MIN_NAME_LEN).
       3. Multiple candidates → pick the one with the highest parent-path
-         similarity, but only if the gap over second place is significant.
+         similarity, but only if the gap over second place is significant
+         (≥ RESOLVER_SIMILARITY_GAP).
     """
     remote_index = _build_remote_index(disk_repos)
 
-    # Name index: normalized_name → list[disk_path]
     name_index: dict[str, list[str]] = {}
     for rel in disk_repos:
         key = _normalize_name(rel.split("/")[-1])
@@ -116,41 +115,35 @@ def resolve_orphans(
         orphan_name = orphan.split("/")[-1]
         norm = _normalize_name(orphan_name)
 
-        # Skip names that are too generic to match safely
-        if norm in _SKIP_NAMES or len(norm) < 5:
+        if norm in _SKIP_NAMES or len(norm) < RESOLVER_MIN_NAME_LEN:
             continue
 
-        # ── Signal 1: git remote exact match ────────────────────────────────
-        # The remote URL slug (user/repo) often ends with the repo name.
-        # If the orphan's name appears exactly in the remote, high confidence.
+        # Signal 1: git remote exact match
         matched_via_remote: str | None = None
         for remote_key, disk_path in remote_index.items():
-            remote_repo_name = _normalize_name(remote_key.split("/")[-1])
-            if norm == remote_repo_name:
+            if norm == _normalize_name(remote_key.split("/")[-1]):
                 matched_via_remote = disk_path
                 break
         if matched_via_remote:
             mapping[orphan] = matched_via_remote
             continue
 
-        # ── Signal 2: unique normalized name match ───────────────────────────
+        # Signal 2: unique normalized name match
         candidates = name_index.get(norm, [])
 
         if len(candidates) == 1:
-            # Only one repo on disk has this name — confident match
             mapping[orphan] = candidates[0]
             continue
 
         if len(candidates) > 1:
-            # ── Signal 3: parent path similarity with clear winner ───────────
+            # Signal 3: parent path similarity with clear winner
             scored = sorted(
                 [(c, _path_similarity(orphan, c)) for c in candidates],
                 key=lambda x: -x[1],
             )
             top_score = scored[0][1]
             second_score = scored[1][1] if len(scored) > 1 else 0
-            # Only accept if the best candidate is meaningfully better
-            if top_score > 0 and (top_score - second_score) >= 0.15:
+            if top_score > 0 and (top_score - second_score) >= RESOLVER_SIMILARITY_GAP:
                 mapping[orphan] = scored[0][0]
 
     return mapping
@@ -159,14 +152,14 @@ def resolve_orphans(
 # ── persistence ───────────────────────────────────────────────────────────────
 
 def load_path_map() -> dict[str, str]:
-    if _PATH_MAP_FILE.exists():
-        return json.loads(_PATH_MAP_FILE.read_text())
+    if PATH_MAP_FILE.exists():
+        return json.loads(PATH_MAP_FILE.read_text())
     return {}
 
 
 def save_path_map(mapping: dict[str, str]) -> None:
-    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _PATH_MAP_FILE.write_text(json.dumps(mapping, indent=2, ensure_ascii=False))
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    PATH_MAP_FILE.write_text(json.dumps(mapping, indent=2, ensure_ascii=False))
 
 
 def apply_path_map(rel_path: str, path_map: dict[str, str]) -> str:

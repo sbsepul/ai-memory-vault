@@ -1,26 +1,28 @@
 """
-Extract Codex auto-generated memory summaries from ~/.codex/memories_1.sqlite.
+Extract Codex auto-generated memory summaries from ~/.codex/memories_N.sqlite.
 
 Codex silently builds condensed memories per thread after each session.
 These are stored in SQLite, not in the JSONL session files, so the main
 codex.py extractor never sees them. This module surfaces them separately.
 
 SQLite files used and ignored:
-  memories_1.sqlite  — thread memory summaries          ← READ (this module)
-  state_5.sqlite     — thread metadata index            ← READ (thread titles/cwd)
-  logs_2.sqlite      — app debug logs (243 MB)          ← IGNORED (no conv. data)
-  goals_1.sqlite     — goals tracking (empty)           ← IGNORED
+  memories_N.sqlite  — thread memory summaries          ← READ (this module)
+  state_N.sqlite     — thread metadata index            ← READ (thread titles/cwd)
+  logs_N.sqlite      — app debug logs (~243 MB)         ← IGNORED (no conv. data)
+  goals_N.sqlite     — goals tracking (empty)           ← IGNORED
+
+The version suffix (N) is determined at runtime by scanning for the
+highest-numbered file, so upgrades to newer Codex schema versions are
+handled automatically.
 """
 from __future__ import annotations
 import sqlite3
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-_HOME = Path.home()
-_CODEX_DIR = _HOME / ".codex"
-_MEMORIES_DB = _CODEX_DIR / "memories_1.sqlite"
-_STATE_DB = _CODEX_DIR / "state_5.sqlite"
+from ..config import CODEX_DIR
+from ..utils import rel_path_from_cwd, parse_iso_timestamp, find_latest_sqlite
 
 
 @dataclass
@@ -34,23 +36,15 @@ class CodexMemory:
     usage_count: int = 0
 
 
-def _rel_path(cwd: str) -> str:
-    home_str = str(_HOME)
-    if cwd.startswith(home_str):
-        return cwd[len(home_str):].lstrip("/") or "home"
-    return cwd.lstrip("/")
-
-
-def _load_thread_metadata() -> dict[str, tuple[str, str]]:
-    """Return {thread_id: (cwd, title)} from state_5.sqlite."""
+def _load_thread_metadata(state_db: Path) -> dict[str, tuple[str, str]]:
+    """Return {thread_id: (cwd, title)} from the state SQLite database."""
     meta: dict[str, tuple[str, str]] = {}
-    if not _STATE_DB.exists():
+    if not state_db.exists():
         return meta
     try:
-        con = sqlite3.connect(f"file:{_STATE_DB}?mode=ro", uri=True)
+        con = sqlite3.connect(f"file:{state_db}?mode=ro", uri=True)
         cur = con.execute("SELECT id, cwd, title FROM threads")
-        for row in cur.fetchall():
-            tid, cwd, title = row
+        for tid, cwd, title in cur.fetchall():
             meta[tid] = (cwd or "", title or "")
         con.close()
     except sqlite3.Error:
@@ -58,12 +52,19 @@ def _load_thread_metadata() -> dict[str, tuple[str, str]]:
     return meta
 
 
-def extract_memories(memories_db: Path = _MEMORIES_DB) -> list[CodexMemory]:
-    """Return all Codex auto-generated memory summaries."""
-    if not memories_db.exists():
+def extract_memories(codex_dir: Path = CODEX_DIR) -> list[CodexMemory]:
+    """Return all Codex auto-generated memory summaries.
+
+    Scans for the latest memories_N.sqlite and state_N.sqlite so the
+    function keeps working when Codex bumps its schema version number.
+    """
+    memories_db = find_latest_sqlite(codex_dir, "memories")
+    state_db    = find_latest_sqlite(codex_dir, "state")
+
+    if not memories_db or not memories_db.exists():
         return []
 
-    thread_meta = _load_thread_metadata()
+    thread_meta = _load_thread_metadata(state_db) if state_db else {}
     memories: list[CodexMemory] = []
 
     try:
@@ -76,19 +77,10 @@ def extract_memories(memories_db: Path = _MEMORIES_DB) -> list[CodexMemory]:
             ORDER BY generated_at DESC
             """
         )
-        for row in cur.fetchall():
-            tid, raw_memory, rollout_summary, generated_at_str, usage_count = row
+        for tid, raw_memory, rollout_summary, generated_at_str, usage_count in cur.fetchall():
             cwd, title = thread_meta.get(tid, ("", ""))
-            rel_path = _rel_path(cwd) if cwd else "(unknown)"
-
-            generated_at: datetime | None = None
-            if generated_at_str:
-                try:
-                    generated_at = datetime.fromisoformat(
-                        str(generated_at_str).replace("Z", "+00:00")
-                    )
-                except ValueError:
-                    pass
+            rel_path = rel_path_from_cwd(cwd) if cwd else "(unknown)"
+            generated_at = parse_iso_timestamp(str(generated_at_str)) if generated_at_str else None
 
             memories.append(CodexMemory(
                 thread_id=tid,

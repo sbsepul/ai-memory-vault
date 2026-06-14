@@ -11,6 +11,12 @@ from rich.table import Table
 from rich.text import Text
 from rich.panel import Panel
 
+from .config import (
+    HOME, DEFAULT_OUTPUT_DIR, DEFAULT_SEARCH_DEPTH,
+    DEFAULT_LS_LIMIT, DEFAULT_SEARCH_LIMIT, DEFAULT_MEMORIES_LIMIT,
+    SOURCE_COLORS,
+)
+from .utils import fmt_ts
 from .extractors import claude as claude_ext
 from .extractors import codex as codex_ext
 from .extractors.codex_memory import extract_memories as extract_codex_memories
@@ -24,10 +30,7 @@ from .resolver import (
 
 console = Console()
 
-DEFAULT_OUTPUT = Path.home() / "ai-memory-vault-export"
-
-
-_HOME = Path.home()
+_HOME = HOME
 
 
 def _apply_map_to_sessions(sessions, path_map: dict) -> list:
@@ -185,7 +188,7 @@ def cmd_tree(source: str):
 @main.command("ls")
 @SOURCE_OPTION
 @click.option("--project", "-p", default=None, help="Filter by project path (partial match).")
-@click.option("--limit", "-n", default=50, show_default=True, help="Max sessions to show.")
+@click.option("--limit", "-n", default=DEFAULT_LS_LIMIT, show_default=True, help="Max sessions to show.")
 def cmd_ls(source: str, project: str | None, limit: int):
     """List sessions for a project, newest first."""
     sessions = _load_sessions(source)
@@ -208,8 +211,8 @@ def cmd_ls(source: str, project: str | None, limit: int):
     table.add_column("Msgs", justify="right")
 
     for s in sessions:
-        ts = s.updated_at.strftime("%Y-%m-%d %H:%M") if s.updated_at else "?"
-        src_color = "blue" if s.source == "claude" else "green"
+        ts = fmt_ts(s.updated_at)
+        src_color = SOURCE_COLORS.get(s.source, "white")
         table.add_row(
             ts,
             f"[{src_color}]{s.source}[/{src_color}]",
@@ -227,7 +230,7 @@ def cmd_ls(source: str, project: str | None, limit: int):
 @click.argument("query")
 @SOURCE_OPTION
 @click.option("--project", "-p", default=None, help="Restrict to a project (partial match).")
-@click.option("--limit", "-n", default=20, show_default=True, help="Max results.")
+@click.option("--limit", "-n", default=DEFAULT_SEARCH_LIMIT, show_default=True, help="Max results.")
 @click.option("--case-sensitive", is_flag=True, default=False)
 def cmd_search(query: str, source: str, project: str | None, limit: int, case_sensitive: bool):
     """Search all conversation history for QUERY."""
@@ -247,8 +250,8 @@ def cmd_search(query: str, source: str, project: str | None, limit: int, case_se
 
     for hit in hits:
         s = hit.session
-        ts = hit.message.timestamp.strftime("%Y-%m-%d") if hit.message.timestamp else "?"
-        src_color = "blue" if s.source == "claude" else "green"
+        ts = fmt_ts(hit.message.timestamp, "%Y-%m-%d")
+        src_color = SOURCE_COLORS.get(s.source, "white")
         role_color = "yellow" if hit.message.role == "user" else "white"
 
         header = (
@@ -270,7 +273,7 @@ def cmd_search(query: str, source: str, project: str | None, limit: int, case_se
 
 @main.command("export")
 @SOURCE_OPTION
-@click.option("--output", "-o", default=str(DEFAULT_OUTPUT), show_default=True,
+@click.option("--output", "-o", default=str(DEFAULT_OUTPUT_DIR), show_default=True,
               type=click.Path(), help="Output directory.")
 @click.option("--project", "-p", default=None, help="Filter by project path (partial match).")
 @click.option("--format", "fmt", default="markdown",
@@ -330,7 +333,7 @@ def cmd_export(source: str, output: str, project: str | None, fmt: str, since: s
 @SOURCE_OPTION
 @click.option("--vault-repo", default=None, metavar="URL",
               help="Private git repo URL (saved after first use).")
-@click.option("--output", "-o", default=str(DEFAULT_OUTPUT), show_default=True,
+@click.option("--output", "-o", default=str(DEFAULT_OUTPUT_DIR), show_default=True,
               type=click.Path(), help="Local export directory to commit.")
 @click.option("--since", default=None, metavar="DATE",
               help="Only export sessions updated after DATE before pushing.")
@@ -371,7 +374,7 @@ def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None
 @main.command("pull")
 @click.option("--vault-repo", default=None, metavar="URL",
               help="Private git repo URL (saved after first use).")
-@click.option("--output", "-o", default=str(DEFAULT_OUTPUT), show_default=True,
+@click.option("--output", "-o", default=str(DEFAULT_OUTPUT_DIR), show_default=True,
               type=click.Path(), help="Where to place the downloaded export files.")
 @click.option("--restore-claude", is_flag=True, default=False,
               help=(
@@ -466,7 +469,7 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run:
 @click.option("--project", "-p", default=None, help="Filter by project path (partial match).")
 @click.option("--output", "-o", default=None, type=click.Path(),
               help="Export memories to a Markdown file instead of printing.")
-@click.option("--limit", "-n", default=50, show_default=True)
+@click.option("--limit", "-n", default=DEFAULT_MEMORIES_LIMIT, show_default=True)
 def cmd_memories(project: str | None, output: str | None, limit: int):
     """Show Codex auto-generated memory summaries (from ~/.codex/memories_1.sqlite).
 
@@ -524,7 +527,7 @@ def cmd_memories(project: str | None, output: str | None, limit: int):
 @click.option("--search-dir", "-d", multiple=True, type=click.Path(),
               help="Extra directories to scan for git repos (repeatable). "
                    "Defaults to ~/repos and ~/work.")
-@click.option("--depth", default=5, show_default=True,
+@click.option("--depth", default=DEFAULT_SEARCH_DEPTH, show_default=True,
               help="Max directory depth when scanning for git repos.")
 @click.option("--resolve", is_flag=True, default=False,
               help="Auto-detect orphan→canonical path mappings and save them. "
