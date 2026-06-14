@@ -135,11 +135,15 @@ def cmd_tree(source: str):
     table.add_column("Codex", justify="right")
     table.add_column("Msgs", justify="right")
 
+    all_paths = set(nodes.keys())
     for path, node in nodes.items():
+        is_parent = any(p.startswith(path + "/") for p in all_paths)
         if node.has_git:
             git_icon = ":white_check_mark:"
+        elif node.path_exists and not is_parent:
+            git_icon = ":open_file_folder:"   # 📂 standalone dir, candidate for vault init
         elif node.path_exists:
-            git_icon = ":open_file_folder:"  # 📂 exists but no git
+            git_icon = ":card_index_dividers:"  # 🗂️ parent dir, history only
         else:
             git_icon = ":x:"
         claude_str = f"{node.claude_sessions}s / {node.claude_messages}m" if node.claude_sessions else "-"

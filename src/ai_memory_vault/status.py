@@ -47,14 +47,18 @@ class StatusReport:
 
     @property
     def orphan_exists_no_git(self) -> set[str]:
-        """Orphan paths that exist on disk with files but have no .git.
-        Parent directories of known git repos are excluded."""
+        """Orphan paths that exist on disk with files but have no .git,
+        excluding parent directories of git repos or of other orphan paths
+        (those would end up as repos-containing-repos, which is not useful)."""
         result = set()
         for p in self.orphan:
             full = _HOME / p
             if full.exists() and not (full / ".git").exists():
-                if not any(r.startswith(p + "/") for r in self.disk_repos):
-                    result.add(p)
+                if any(r.startswith(p + "/") for r in self.disk_repos):
+                    continue
+                if any(o.startswith(p + "/") for o in self.orphan if o != p):
+                    continue
+                result.add(p)
         return result
 
     @property
