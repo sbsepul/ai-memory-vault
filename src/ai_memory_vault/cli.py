@@ -18,10 +18,23 @@ from .exporters.markdown import export_sessions
 from .tree import build_tree
 from .search import search as do_search
 from .status import build_status
+from .resolver import (
+    resolve_orphans, load_path_map, save_path_map, apply_path_map
+)
 
 console = Console()
 
 DEFAULT_OUTPUT = Path.home() / "ai-memory-vault-export"
+
+
+def _apply_map_to_sessions(sessions, path_map: dict) -> list:
+    if not path_map:
+        return sessions
+    for s in sessions:
+        canonical = apply_path_map(s.project_rel_path, path_map)
+        if canonical != s.project_rel_path:
+            s.project_rel_path = canonical
+    return sessions
 
 SOURCE_OPTION = click.option(
     "--source", default="all",
@@ -39,6 +52,11 @@ def _load_sessions(source: str, since: str | None = None):
     if source in ("codex", "all"):
         with console.status("[bold green]Reading Codex sessions…"):
             sessions += codex_ext.extract_all()
+
+    # Apply saved path map so orphan paths resolve to canonical locations
+    path_map = load_path_map()
+    if path_map:
+        sessions = _apply_map_to_sessions(sessions, path_map)
 
     if since:
         try:
@@ -473,7 +491,10 @@ def cmd_memories(project: str | None, output: str | None, limit: int):
                    "Defaults to ~/repos and ~/work.")
 @click.option("--depth", default=5, show_default=True,
               help="Max directory depth when scanning for git repos.")
-def cmd_status(source: str, search_dir: tuple, depth: int):
+@click.option("--resolve", is_flag=True, default=False,
+              help="Auto-detect orphan→canonical path mappings and save them. "
+                   "After running, all commands will use the resolved paths.")
+def cmd_status(source: str, search_dir: tuple, depth: int, resolve: bool):
     """Cross-reference git repos on disk against AI conversation history.
 
     \b
@@ -481,6 +502,9 @@ def cmd_status(source: str, search_dir: tuple, depth: int):
       ✅ repo + history  — repos that have AI sessions (covered)
       ❌ repo, no history — repos never used with Claude/Codex (or path changed)
       👻 history, no repo — AI sessions pointing to paths that no longer exist
+
+    Run with --resolve to automatically link orphan history to its current
+    repo location. The mapping is saved and applied by all commands.
     """
     sessions = _load_sessions(source)
 
@@ -488,6 +512,35 @@ def cmd_status(source: str, search_dir: tuple, depth: int):
 
     with console.status("Scanning git repos on disk…"):
         report = build_status(sessions, search_dirs=dirs, max_depth=depth)
+
+    # ── auto-resolve orphans ──────────────────────────────────────────────────
+    if resolve and report.orphan:
+        with console.status("[yellow]Resolving orphan paths…"):
+            new_matches = resolve_orphans(report.orphan, report.disk_repos)
+
+        existing_map = load_path_map()
+        merged = {**existing_map, **new_matches}
+
+        if new_matches:
+            t = Table(title="🔗 Path mappings resolved", show_lines=False)
+            t.add_column("Orphan path (old)", style="yellow")
+            t.add_column("→ Canonical path (current)", style="green")
+            for old, new in sorted(new_matches.items()):
+                t.add_row(old, new)
+            console.print(t)
+
+            save_path_map(merged)
+            console.print(
+                f"\n[green]✓ {len(new_matches)} mappings saved[/green] → "
+                f"[dim]~/.config/ai-memory-vault/path-map.json[/dim]\n"
+                "[dim]All vault commands will now use resolved paths.[/dim]"
+            )
+
+            # Re-apply and rebuild report with the new map
+            sessions = _apply_map_to_sessions(sessions, merged)
+            report = build_status(sessions, search_dirs=dirs, max_depth=depth)
+        else:
+            console.print("[yellow]No new mappings found automatically.[/yellow]")
 
     # ── summary panel ─────────────────────────────────────────────────────────
     console.print()
