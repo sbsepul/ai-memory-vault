@@ -24,6 +24,7 @@ vault summary
 - **Portable paths** — strips `$HOME` prefix so `work/my-project` works on any machine, regardless of username or OS
 - **Project tree** — see which directories have AI history, whether they have a git repo or not
 - **Full-text search** — grep across 70 000+ messages in milliseconds
+- **Codex memory summaries** — surfaces the condensed notes Codex silently generates per session in SQLite (`memories_1.sqlite`), invisible from the normal UI
 - **Multiple export formats** — Markdown (human-readable) or JSON (for scripts)
 - **Private vault sync** — push exports to any private git repo for backup and cross-machine access
 
@@ -33,6 +34,7 @@ vault summary
 |---|---|
 | Claude Code history lives in `~/.claude/` (not backed up) | `vault export` → portable Markdown / JSON |
 | Codex history lives in `~/.codex/` (no export tool existed) | Built from scratch, handles all Codex event types |
+| Codex memory summaries buried in SQLite, invisible to users | `vault memories` extracts them from `memories_1.sqlite` |
 | Paths are absolute → break on new machine | All paths stored relative to `$HOME` |
 | No way to search old conversations | `vault search <query>` across all sources |
 | Can't see which projects have history | `vault tree` with git status per directory |
@@ -133,6 +135,32 @@ vault push
 vault push --include-raw
 ```
 
+### `vault memories`
+Show the condensed memory summaries that Codex auto-generates after each session
+and stores silently in `~/.codex/memories_1.sqlite` — not visible anywhere in the UI.
+
+```bash
+vault memories                              # all summaries, newest first
+vault memories --project dream-home         # filter by project
+vault memories --output codex-memories.md  # export to Markdown file
+vault memories --limit 10
+```
+
+```
+80 Codex memory summaries
+
+╭─ repos/dream-home  2026-05-14  used 3x  scraping pipeline ─────────────────╮
+│ # Property scraping pipeline for dream-home                                 │
+│ The user set up a Playwright-based scraper targeting Portal Inmobiliario.   │
+│ Key decisions: rotating user-agents, exponential backoff on 429s,           │
+│ storing raw HTML before parsing so reruns don't need re-fetching…           │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
+
+> These summaries are the most condensed, high-signal notes about your past
+> work. Codex generates them automatically — `vault memories` is the only way
+> to read them outside the Codex UI.
+
 ### `vault pull`
 Pull conversation history from the vault repo to this machine.
 
@@ -180,12 +208,25 @@ usernames, operating systems, and home directory layouts.
 ### Claude Code (`~/.claude/projects/`)
 Each directory name encodes the absolute project path (`-home-user-repos-project`). `vault` decodes this to a relative path (`repos/project`) at extraction time.
 
-### Codex CLI (`~/.codex/sessions/YYYY/MM/DD/`)
-Sessions are JSONL files. Messages live inside `event_msg` events with `payload.type` of `user_message`, `agent_message`, or `task_complete`. The `session_meta` event carries `cwd` (used to derive the relative project path) and `session_index.jsonl` provides human-readable thread names.
+### Codex CLI (`~/.codex/`)
+
+Codex stores data across two formats:
+
+**Session files** (`sessions/YYYY/MM/DD/rollout-*.jsonl`) — full conversation history. Messages live inside `event_msg` events with `payload.type` of `user_message`, `agent_message`, or `task_complete`. The `session_meta` event carries `cwd` for the project path.
+
+**SQLite databases** — four files with distinct roles:
+
+| File | Contents | Used by vault |
+|---|---|---|
+| `memories_1.sqlite` | Auto-generated memory summaries per session | ✅ `vault memories` |
+| `state_5.sqlite` | Thread index: `cwd`, `title`, `first_user_message` | ✅ metadata index |
+| `logs_2.sqlite` (243 MB) | Internal app debug logs | ❌ ignored |
+| `goals_1.sqlite` | Goal tracking (empty in most installs) | ❌ ignored |
 
 ## Roadmap
 
 - [x] `vault pull` — restore sessions to a new machine with automatic path remapping
+- [x] `vault memories` — surface Codex auto-generated memory summaries from SQLite
 - [ ] `vault pull --restore-codex` — restore Codex sessions (SQLite rebuild)
 - [ ] `vault serve` — local web viewer for browsing conversations
 - [ ] Incremental export (only new sessions since last run)
