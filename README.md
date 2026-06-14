@@ -1,236 +1,312 @@
 # ai-memory-vault
 
-> Unified export, search, and sync for **Claude Code CLI** and **Codex CLI** conversation history.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![Supports Claude Code](https://img.shields.io/badge/Claude%20Code-supported-blueviolet)](https://claude.ai/code)
+[![Supports Codex](https://img.shields.io/badge/Codex%20CLI-supported-green)](https://github.com/openai/codex)
 
-Your AI sessions accumulate locally but disappear when you switch machines. `ai-memory-vault` extracts every conversation from both tools, normalizes paths relative to `$HOME` (so they survive machine migrations), and lets you explore, search, and export everything in one command.
+**Your AI coding sessions disappear when you switch machines. `ai-memory-vault` fixes that.**
 
+It reads every conversation from **Claude Code CLI** and **Codex CLI**, normalizes paths so they survive machine migrations, and gives you a single command to search, export, and sync your entire AI history — privately.
+
+```bash
+vault summary        # how much history do I have?
+vault search "auth"  # find any conversation, instantly
+vault push           # back up everything to a private git repo
 ```
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Sources
+        A["~/.claude/projects/\n(JSONL)"]
+        B["~/.codex/sessions/\n(JSONL + SQLite)"]
+    end
+
+    subgraph vault
+        C[Extract & normalize paths]
+        D[Resolve orphans & subdirs]
+    end
+
+    subgraph Outputs
+        E["vault search\nvault tree\nvault ls"]
+        F["vault export\n(Markdown / JSON)"]
+        G["vault push/pull\n(private git repo)"]
+    end
+
+    A --> C
+    B --> C
+    C --> D
+    D --> E
+    D --> F
+    D --> G
+```
+
+All paths are stored **relative to `$HOME`** — so `repos/my-project` works on any machine regardless of username or OS.
+
+---
+
+## Get Started
+
+**With [uv](https://docs.astral.sh/uv/) (recommended):**
+
+```bash
+uv tool install git+https://github.com/sbsepul/ai-memory-vault.git
 vault summary
 ```
-```
-           AI Memory Vault — Summary
-┏━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Source      ┃ Sessions ┃ Messages ┃ Projects ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
-│ Claude Code │       65 │    20541 │       12 │
-│ Codex       │      763 │    49642 │       75 │
-│ Total       │      828 │    70183 │       85 │
-└─────────────┴──────────┴──────────┴──────────┘
+
+**With pip:**
+
+```bash
+pip install git+https://github.com/sbsepul/ai-memory-vault.git
+vault summary
 ```
 
-## Features
-
-- **Dual-source extraction** — reads `~/.claude/projects/` (JSONL) and `~/.codex/sessions/` (JSONL + SQLite index) without any configuration
-- **Portable paths** — strips `$HOME` prefix so `work/my-project` works on any machine, regardless of username or OS
-- **Project tree** — see which directories have AI history, whether they have a git repo or not
-- **Full-text search** — grep across 70 000+ messages in milliseconds
-- **Codex memory summaries** — surfaces the condensed notes Codex silently generates per session in SQLite (`memories_1.sqlite`), invisible from the normal UI
-- **Multiple export formats** — Markdown (human-readable) or JSON (for scripts)
-- **Private vault sync** — push exports to any private git repo for backup and cross-machine access
-
-## Why this exists
-
-| Problem | Solution |
-|---|---|
-| Claude Code history lives in `~/.claude/` (not backed up) | `vault export` → portable Markdown / JSON |
-| Codex history lives in `~/.codex/` (no export tool existed) | Built from scratch, handles all Codex event types |
-| Codex memory summaries buried in SQLite, invisible to users | `vault memories` extracts them from `memories_1.sqlite` |
-| Paths are absolute → break on new machine | All paths stored relative to `$HOME` |
-| No way to search old conversations | `vault search <query>` across all sources |
-| Can't see which projects have history | `vault tree` with git status per directory |
-
-## Installation
+**From source:**
 
 ```bash
 git clone https://github.com/sbsepul/ai-memory-vault.git
 cd ai-memory-vault
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+uv sync && vault summary
+# or: python3 -m venv .venv && source .venv/bin/activate && pip install -e .
 ```
 
-**Requirements**: Python 3.10+, Claude Code CLI and/or Codex CLI installed locally.
+> **Requirements:** Python 3.10+. Claude Code CLI and/or Codex CLI must be installed and have been used at least once.
+
+---
 
 ## Commands
 
-### `vault summary`
-Quick count of sessions, messages, and projects per tool.
+### `vault summary` — how much history do you have?
 
 ```bash
 vault summary
 vault summary --source claude
-vault summary --source codex
 ```
 
-### `vault tree`
-Project tree showing every directory that has AI conversation history, with git status.
+| Source | Sessions | Messages | Projects |
+|--------|----------|----------|----------|
+| Claude Code | 65 | 20,541 | 12 |
+| Codex | 763 | 49,642 | 75 |
+| **Total** | **828** | **70,183** | **85** |
+
+---
+
+### `vault tree` — which projects have AI history?
 
 ```bash
 vault tree
 vault tree --source codex
 ```
 
-```
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
-┃ Project (rel. to ~)        ┃ Git ┃ Claude      ┃ Codex        ┃ Total msgs ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
-│ repos/dream-home           │ ✅  │ 9s / 2383m  │ 16s / 2190m  │       4573 │
-│ work/my-company/backend    │ ✅  │ 12s / 4210m │ 87s / 9841m  │      14051 │
-│ Downloads/analysis         │ ❌  │ -           │ 7s / 51m     │         51 │
-└────────────────────────────┴─────┴─────────────┴──────────────┴────────────┘
-```
+| Project (rel. to ~) | Git | Claude | Codex | Msgs |
+|---|:---:|---|---|---:|
+| repos/my-project | ✅ | 9s / 2383m | 16s / 2190m | 4,573 |
+| work/backend | ✅ | 12s / 4210m | 87s / 9841m | 14,051 |
+| Downloads/notes | 📂 | — | 7s / 51m | 51 |
+| old/renamed-dir | ❌ | 3s / 104m | — | 104 |
 
-The `❌` (no-git) rows are exactly the ones you can't recover from version control — those are the most important to back up.
+**Git column legend:**
 
-### `vault ls`
-List sessions for a specific project.
+| Icon | Meaning |
+|------|---------|
+| ✅ | Git repo — history is recoverable from version control |
+| 📂 | Directory exists but has no git repo — most important to back up |
+| 🗂️ | Parent directory — contains sub-repos, history shown for context |
+| ❌ | Directory no longer exists on disk — history is orphaned |
+
+---
+
+### `vault status` — cross-reference repos vs AI history
 
 ```bash
-vault ls --project dream-home
-vault ls --project my-company --source codex --limit 20
+vault status
+vault status --resolve   # auto-detect orphan → canonical path mappings
 ```
 
-### `vault search`
-Full-text search across all sessions.
+`--resolve` uses git remote URLs and normalized name matching to detect when a project was renamed or moved, and saves the mapping so all future commands apply it automatically.
+
+---
+
+### `vault init` — create a git repo for a no-git directory
+
+When `vault status` shows a `📂` path (has AI history, no git):
+
+```bash
+vault init --project "Downloads/notes"           # git init + gh repo create (private)
+vault init --project work/my-folder --public     # public GitHub repo
+vault init --project work/my-folder --no-remote  # local only
+```
+
+---
+
+### `vault ls` — list sessions for a project
+
+```bash
+vault ls --project my-project
+vault ls --project backend --source codex --limit 20
+```
+
+---
+
+### `vault search` — full-text search across all sessions
 
 ```bash
 vault search "authentication middleware"
 vault search "docker compose" --source codex
-vault search "migration" --project my-company --limit 5
+vault search "migration" --project backend --limit 5
 ```
 
-### `vault export`
-Export sessions to Markdown or JSON.
+Returns matches with surrounding context, timestamps, and project path.
+
+---
+
+### `vault export` — export to Markdown or JSON
 
 ```bash
 vault export                                    # everything → ~/ai-memory-vault-export/
-vault export --source codex                     # only Codex
-vault export --project dream-home               # filter by project (partial match)
-vault export --format json --output ./backup    # JSON for scripts
-vault export --since 2026-01-01                 # only recent sessions
+vault export --source codex
+vault export --project my-project
+vault export --format json --output ./backup
+vault export --since 2026-01-01
 ```
 
-Output structure mirrors `source/project_rel_path/`:
+Output mirrors the source structure:
+
 ```
 ~/ai-memory-vault-export/
 ├── claude/
-│   └── repos/dream-home/
+│   └── repos/my-project/
 │       ├── 20260115-1430_37825382.md
 │       └── 20260203-0912_54da0e24.md
 └── codex/
-    └── work/my-company/backend/
+    └── work/backend/
         └── 20260601-1219_019e83fc.md
 ```
 
-### `vault push`
-Export and commit to a private git repository.
+---
+
+### `vault push` — back up to a private git repo
 
 ```bash
-# First time: set the private vault repo URL (saved for future runs)
-vault push --vault-repo git@github.com:youruser/my-private-vault.git
+# First run — save vault URL for future use
+vault push --vault-repo git@github.com:you/my-vault.git
 
-# Subsequent pushes
+# Every run after
 vault push
 
-# Also backup raw Claude JSONL files so the new machine can fully restore them
+# Include raw Claude JSONL for full native restore on a new machine
 vault push --include-raw
 ```
 
-### `vault memories`
-Show the condensed memory summaries that Codex auto-generates after each session
-and stores silently in `~/.codex/memories_1.sqlite` — not visible anywhere in the UI.
+---
+
+### `vault pull` — restore on a new machine
 
 ```bash
-vault memories                              # all summaries, newest first
-vault memories --project dream-home         # filter by project
-vault memories --output codex-memories.md  # export to Markdown file
+vault pull --vault-repo git@github.com:you/my-vault.git   # Markdown exports
+vault pull --restore-claude                                  # restore Claude sessions natively
+vault pull --restore-claude --dry-run                       # preview without writing
+```
+
+Path re-encoding is **automatic** — a session from `/home/alice/repos/project` is restored to the correct path for the current user on the new machine, no manual editing needed.
+
+---
+
+### `vault memories` — read Codex auto-generated memory summaries
+
+Codex silently generates condensed session summaries in `~/.codex/memories_1.sqlite` after each conversation. They are not visible anywhere in the Codex UI. `vault memories` is the only way to read them.
+
+```bash
+vault memories
+vault memories --project my-project
+vault memories --output memories.md
 vault memories --limit 10
 ```
 
-```
-80 Codex memory summaries
-
-╭─ repos/dream-home  2026-05-14  used 3x  scraping pipeline ─────────────────╮
-│ # Property scraping pipeline for dream-home                                 │
-│ The user set up a Playwright-based scraper targeting Portal Inmobiliario.   │
-│ Key decisions: rotating user-agents, exponential backoff on 429s,           │
-│ storing raw HTML before parsing so reruns don't need re-fetching…           │
-╰─────────────────────────────────────────────────────────────────────────────╯
-```
-
-> These summaries are the most condensed, high-signal notes about your past
-> work. Codex generates them automatically — `vault memories` is the only way
-> to read them outside the Codex UI.
-
-### `vault pull`
-Pull conversation history from the vault repo to this machine.
-
-```bash
-# Download Markdown exports for browsing (always works)
-vault pull --vault-repo git@github.com:youruser/my-private-vault.git
-
-# Also restore Claude Code sessions natively (requires prior push --include-raw)
-vault pull --restore-claude
-
-# Preview what would be restored without writing anything
-vault pull --restore-claude --dry-run
-```
-
-Path remapping is **automatic**: a session from `/home/alice/repos/project`
-is restored to `~/.claude/projects/-home-bob-repos-project/` on the new
-machine — no manual editing needed.
+---
 
 ## Cross-machine migration
 
 ```
-# ── Machine A (source) ──────────────────────────────────────────────────────
+# ── Machine A (source) ───────────────────────────────
+vault push --vault-repo git@github.com:you/vault.git --include-raw
 
-# Backup Markdown exports + raw Claude JSONL to a private repo
-vault push --vault-repo git@github.com:youruser/vault.git --include-raw
+# ── Machine B (destination) ──────────────────────────
+uv tool install git+https://github.com/sbsepul/ai-memory-vault.git
+vault pull --vault-repo git@github.com:you/vault.git --restore-claude
 
-# ── Machine B (destination) ─────────────────────────────────────────────────
-
-git clone https://github.com/sbsepul/ai-memory-vault.git
-cd ai-memory-vault && python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-
-# Download exports and restore Claude sessions (paths re-encoded for this machine)
-vault pull --vault-repo git@github.com:youruser/vault.git --restore-claude
-
-# Restart Claude Code — it will pick up the restored sessions automatically
+# Restart Claude Code — sessions are immediately available
 ```
 
-The vault stores paths relative to `$HOME` (`repos/dream-home`, not
-`/home/alice/repos/dream-home`), so restoration works across different
-usernames, operating systems, and home directory layouts.
+---
 
-## Storage formats decoded
+## Security
+
+**What vault reads (locally, read-only):**
+
+| Path | Contents | Used for |
+|------|----------|----------|
+| `~/.claude/projects/` | JSONL session files | Claude Code history |
+| `~/.codex/sessions/` | JSONL session files | Codex history |
+| `~/.codex/memories_1.sqlite` | Auto-generated summaries | `vault memories` |
+| `~/.codex/state_5.sqlite` | Thread metadata (cwd, title) | Project path resolution |
+
+**What vault never does:**
+- Makes no network requests of its own
+- Sends no telemetry or analytics
+- Does not read `logs_2.sqlite` (243 MB Codex debug log — ignored)
+- Does not write to `~/.claude/` or `~/.codex/` except during `vault pull --restore-claude`
+
+**`vault push` / `vault pull`:** Your conversation history — including code, file contents, and prompts — is sent to the private git repository **you control**. Use a private repo. The transport is whatever your git remote uses (SSH or HTTPS).
+
+**`vault export`** writes plaintext files to disk. Exports contain your full conversation history. Treat them accordingly.
+
+---
+
+## Storage formats
 
 ### Claude Code (`~/.claude/projects/`)
-Each directory name encodes the absolute project path (`-home-user-repos-project`). `vault` decodes this to a relative path (`repos/project`) at extraction time.
+
+Directory names encode the absolute project path by replacing `/` with `-` (e.g. `-home-user-repos-my-project`). `vault` decodes this by reading the `cwd` field from JSONL events rather than the directory name — this avoids ambiguity when project names contain hyphens.
 
 ### Codex CLI (`~/.codex/`)
 
-Codex stores data across two formats:
+Sessions are stored as JSONL files under `sessions/YYYY/MM/DD/`. Messages are wrapped in `event_msg` envelopes with a `payload.type` discriminator (`user_message`, `agent_message`, `task_complete`). The project path comes from the `session_meta` event's `cwd` field.
 
-**Session files** (`sessions/YYYY/MM/DD/rollout-*.jsonl`) — full conversation history. Messages live inside `event_msg` events with `payload.type` of `user_message`, `agent_message`, or `task_complete`. The `session_meta` event carries `cwd` for the project path.
-
-**SQLite databases** — four files with distinct roles:
+Codex also maintains four SQLite databases:
 
 | File | Contents | Used by vault |
-|---|---|---|
-| `memories_1.sqlite` | Auto-generated memory summaries per session | ✅ `vault memories` |
-| `state_5.sqlite` | Thread index: `cwd`, `title`, `first_user_message` | ✅ metadata index |
-| `logs_2.sqlite` (243 MB) | Internal app debug logs | ❌ ignored |
-| `goals_1.sqlite` | Goal tracking (empty in most installs) | ❌ ignored |
+|------|----------|:---:|
+| `memories_1.sqlite` | Auto-generated memory summaries | ✅ |
+| `state_5.sqlite` | Thread index: `cwd`, title, first message | ✅ |
+| `logs_2.sqlite` | Internal debug logs (~243 MB) | ❌ |
+| `goals_1.sqlite` | Goal tracking (empty in most installs) | ❌ |
+
+---
 
 ## Roadmap
 
-- [x] `vault pull` — restore sessions to a new machine with automatic path remapping
-- [x] `vault memories` — surface Codex auto-generated memory summaries from SQLite
+- [x] Dual-source extraction (Claude Code + Codex)
+- [x] Portable paths — relative to `$HOME`, survives username changes
+- [x] `vault push` / `vault pull` — private git backup and cross-machine restore
+- [x] `vault memories` — surface Codex SQLite summaries
+- [x] `vault status` — cross-reference repos on disk vs AI history
+- [x] `vault status --resolve` — auto-detect orphan path mappings
+- [x] `vault init` — create a git repo for no-git directories with AI history
 - [ ] `vault pull --restore-codex` — restore Codex sessions (SQLite rebuild)
 - [ ] `vault serve` — local web viewer for browsing conversations
 - [ ] Incremental export (only new sessions since last run)
 - [ ] Cursor and Windsurf support
+
+---
+
+## Contributing
+
+Issues and PRs welcome. Please open an issue before working on a large change.
 
 ## License
 
