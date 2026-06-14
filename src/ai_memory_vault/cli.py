@@ -17,6 +17,7 @@ from .extractors.codex_memory import extract_memories as extract_codex_memories
 from .exporters.markdown import export_sessions
 from .tree import build_tree
 from .search import search as do_search
+from .status import build_status
 
 console = Console()
 
@@ -461,3 +462,81 @@ def cmd_memories(project: str | None, output: str | None, limit: int):
         if len(m.rollout_summary or m.raw_memory or "") > 400:
             body += "…"
         console.print(Panel(body, title=header, title_align="left", padding=(0, 1)))
+
+
+# ── status ────────────────────────────────────────────────────────────────────
+
+@main.command("status")
+@SOURCE_OPTION
+@click.option("--search-dir", "-d", multiple=True, type=click.Path(),
+              help="Extra directories to scan for git repos (repeatable). "
+                   "Defaults to ~/repos and ~/work.")
+@click.option("--depth", default=5, show_default=True,
+              help="Max directory depth when scanning for git repos.")
+def cmd_status(source: str, search_dir: tuple, depth: int):
+    """Cross-reference git repos on disk against AI conversation history.
+
+    \b
+    Shows three categories:
+      ✅ repo + history  — repos that have AI sessions (covered)
+      ❌ repo, no history — repos never used with Claude/Codex (or path changed)
+      👻 history, no repo — AI sessions pointing to paths that no longer exist
+    """
+    sessions = _load_sessions(source)
+
+    dirs = [Path(d) for d in search_dir] if search_dir else None
+
+    with console.status("Scanning git repos on disk…"):
+        report = build_status(sessions, search_dirs=dirs, max_depth=depth)
+
+    # ── summary panel ─────────────────────────────────────────────────────────
+    console.print()
+    summary = Table.grid(padding=(0, 2))
+    summary.add_column(style="bold")
+    summary.add_column(justify="right", style="bold")
+    summary.add_row("Git repos on disk",          str(len(report.disk_repos)))
+    summary.add_row("Projects with AI history",   str(len(report.ai_paths)))
+    summary.add_row("[green]✅ repo + history[/green]",      f"[green]{len(report.with_history)}[/green]")
+    summary.add_row("[red]❌ repo, no history[/red]",        f"[red]{len(report.no_history)}[/red]")
+    summary.add_row("[yellow]👻 history, no repo[/yellow]",  f"[yellow]{len(report.orphan)}[/yellow]")
+    console.print(Panel(summary, title="vault status", padding=(0, 2)))
+
+    # ── repos WITH history ────────────────────────────────────────────────────
+    if report.with_history:
+        t = Table(title=f"✅ Repos with AI history ({len(report.with_history)})",
+                  show_lines=False)
+        t.add_column("Project (rel. to ~)", style="cyan")
+        t.add_column("Sessions", justify="right")
+        t.add_column("Messages", justify="right")
+        stats = report.with_history_stats(sessions)
+        for path in sorted(stats):
+            n_s, n_m = stats[path]
+            t.add_row(path, str(n_s), str(n_m))
+        console.print(t)
+
+    # ── repos WITHOUT history ─────────────────────────────────────────────────
+    if report.no_history:
+        t = Table(title=f"❌ Repos with NO AI history ({len(report.no_history)})",
+                  show_lines=False)
+        t.add_column("Project (rel. to ~)", style="dim")
+        for path in sorted(report.no_history):
+            t.add_row(path)
+        console.print(t)
+
+    # ── orphan history ────────────────────────────────────────────────────────
+    if report.orphan:
+        t = Table(
+            title=f"👻 AI history whose directory no longer exists ({len(report.orphan)})",
+            show_lines=False,
+        )
+        t.add_column("Path (rel. to ~)", style="yellow")
+        t.add_column("Sessions", justify="right")
+        t.add_column("Messages", justify="right")
+        t.add_column("Note", style="dim")
+        stats = report.orphan_stats(sessions)
+        for path in sorted(stats):
+            n_s, n_m = stats[path]
+            # hint: path may have moved inside repos/
+            note = "dir moved/renamed?" if not (Path.home() / path).exists() else ""
+            t.add_row(path, str(n_s), str(n_m), note)
+        console.print(t)
