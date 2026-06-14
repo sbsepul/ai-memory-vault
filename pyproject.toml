@@ -5,14 +5,47 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-memory-vault"
 version = "0.1.0"
-description = "Export and sync AI conversation history from Claude Code CLI and Codex CLI"
+description = "Backup, export, and search AI agent session history from Claude Code, Codex CLI, and other AI coding assistants"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+keywords = [
+    "claude-code", "codex-cli", "openai-codex", "ai-agent", "ai-memory",
+    "chat-backup", "chat-history", "conversation-history", "session-backup",
+    "session-export", "ai-coding-assistant", "claude-backup", "codex-backup",
+    "ai-history", "developer-tools", "anthropic", "github-copilot", "aider",
+    "ai-agent-cli", "coding-assistant-backup"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
 dependencies = [
     "click>=8.1",
     "rich>=13.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "isort>=6.0",
+    "pre-commit>=4.0",
+    "ruff>=0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/sbsepul/ai-memory-vault"
+Repository = "https://github.com/sbsepul/ai-memory-vault"
+"Bug Tracker" = "https://github.com/sbsepul/ai-memory-vault/issues"
+Documentation = "https://github.com/sbsepul/ai-memory-vault#readme"
 
 [project.scripts]
 vault = "ai_memory_vault.cli:main"
@@ -22,3 +55,19 @@ where = ["src"]
 
 [tool.setuptools.package-dir]
 "" = "src"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.isort]
+profile = "black"
+line_length = 100
+src_paths = ["src"]
