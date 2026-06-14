@@ -136,7 +136,12 @@ def cmd_tree(source: str):
     table.add_column("Msgs", justify="right")
 
     for path, node in nodes.items():
-        git_icon = ":white_check_mark:" if node.has_git else ":x:"
+        if node.has_git:
+            git_icon = ":white_check_mark:"
+        elif node.path_exists:
+            git_icon = ":open_file_folder:"  # 📂 exists but no git
+        else:
+            git_icon = ":x:"
         claude_str = f"{node.claude_sessions}s / {node.claude_messages}m" if node.claude_sessions else "-"
         codex_str = f"{node.codex_sessions}s / {node.codex_messages}m" if node.codex_sessions else "-"
         table.add_row(path, git_icon, claude_str, codex_str, str(node.total_messages))
@@ -546,16 +551,20 @@ def cmd_status(source: str, search_dir: tuple, depth: int, resolve: bool):
         else:
             console.print("[yellow]No new mappings found automatically.[/yellow]")
 
+    exists_no_git = report.orphan_exists_no_git
+    missing = report.orphan_missing
+
     # ── summary panel ─────────────────────────────────────────────────────────
     console.print()
     summary = Table.grid(padding=(0, 2))
     summary.add_column(style="bold")
     summary.add_column(justify="right", style="bold")
-    summary.add_row("Git repos on disk",          str(len(report.disk_repos)))
-    summary.add_row("Projects with AI history",   str(len(report.ai_paths)))
-    summary.add_row("[green]✅ repo + history[/green]",      f"[green]{len(report.with_history)}[/green]")
-    summary.add_row("[red]❌ repo, no history[/red]",        f"[red]{len(report.no_history)}[/red]")
-    summary.add_row("[yellow]👻 history, no repo[/yellow]",  f"[yellow]{len(report.orphan)}[/yellow]")
+    summary.add_row("Git repos on disk",                   str(len(report.disk_repos)))
+    summary.add_row("Projects with AI history",            str(len(report.ai_paths)))
+    summary.add_row("[green]✅ repo + history[/green]",    f"[green]{len(report.with_history)}[/green]")
+    summary.add_row("[red]❌ repo, no history[/red]",      f"[red]{len(report.no_history)}[/red]")
+    summary.add_row("[cyan]📂 files, no git[/cyan]",       f"[cyan]{len(exists_no_git)}[/cyan]")
+    summary.add_row("[yellow]👻 history, dir gone[/yellow]", f"[yellow]{len(missing)}[/yellow]")
     console.print(Panel(summary, title="vault status", padding=(0, 2)))
 
     # ── repos WITH history ────────────────────────────────────────────────────
@@ -580,10 +589,29 @@ def cmd_status(source: str, search_dir: tuple, depth: int, resolve: bool):
             t.add_row(path)
         console.print(t)
 
-    # ── orphan history ────────────────────────────────────────────────────────
-    if report.orphan:
+    # ── dirs with files but no git ────────────────────────────────────────────
+    if exists_no_git:
+        stats = report.orphan_stats(sessions)
         t = Table(
-            title=f"👻 AI history whose directory no longer exists ({len(report.orphan)})",
+            title=f"📂 Dirs with AI history but no git repo ({len(exists_no_git)})",
+            show_lines=False,
+        )
+        t.add_column("Path (rel. to ~)", style="cyan")
+        t.add_column("Sessions", justify="right")
+        t.add_column("Messages", justify="right")
+        for path in sorted(exists_no_git):
+            n_s, n_m = stats.get(path, (0, 0))
+            t.add_row(path, str(n_s), str(n_m))
+        console.print(t)
+        console.print(
+            "[dim]Run [bold]vault init --project <path>[/bold] to create a git repo "
+            "and optionally push it to GitHub.[/dim]\n"
+        )
+
+    # ── orphan history (dir gone) ─────────────────────────────────────────────
+    if missing:
+        t = Table(
+            title=f"👻 AI history whose directory no longer exists ({len(missing)})",
             show_lines=False,
         )
         t.add_column("Path (rel. to ~)", style="yellow")
@@ -591,9 +619,85 @@ def cmd_status(source: str, search_dir: tuple, depth: int, resolve: bool):
         t.add_column("Messages", justify="right")
         t.add_column("Note", style="dim")
         stats = report.orphan_stats(sessions)
-        for path in sorted(stats):
-            n_s, n_m = stats[path]
-            # hint: path may have moved inside repos/
-            note = "dir moved/renamed?" if not (Path.home() / path).exists() else ""
-            t.add_row(path, str(n_s), str(n_m), note)
+        for path in sorted(missing):
+            n_s, n_m = stats.get(path, (0, 0))
+            t.add_row(path, str(n_s), str(n_m), "dir moved/renamed?")
+        console.print(t)
+
+
+# ── init ──────────────────────────────────────────────────────────────────────
+
+@main.command("init")
+@click.option("--project", "-p", required=True,
+              help="Project path relative to ~ (e.g. 'Downloads/Health Family').")
+@click.option("--remote/--no-remote", default=True, show_default=True,
+              help="Create a GitHub repository with 'gh repo create'.")
+@click.option("--private/--public", default=True, show_default=True,
+              help="GitHub repo visibility (only applies when --remote is set).")
+def cmd_init(project: str, remote: bool, private: bool):
+    """Initialize a git repo for a directory that has AI history but no git.
+
+    \b
+    Steps performed:
+      1. git init
+      2. git add -A && git commit -m "initial commit"
+      3. gh repo create  (optional, requires 'gh' CLI authenticated)
+      4. git push -u origin main
+    """
+    import shutil
+    import subprocess as sp
+
+    project_path = Path.home() / project
+
+    if not project_path.exists():
+        console.print(f"[red]Directory not found:[/red] ~/{project}")
+        raise SystemExit(1)
+
+    if (project_path / ".git").exists():
+        console.print(f"[yellow]Already a git repo:[/yellow] ~/{project}")
+        raise SystemExit(0)
+
+    console.print(f"\n[bold]Initializing git repo in[/bold] ~/{project}\n")
+
+    # ── git init + initial commit ─────────────────────────────────────────────
+    def run(cmd: list[str], **kwargs) -> sp.CompletedProcess:
+        return sp.run(cmd, cwd=project_path, check=True, **kwargs)
+
+    run(["git", "init", "-b", "main"])
+    run(["git", "add", "-A"])
+
+    result = sp.run(["git", "status", "--short"], cwd=project_path,
+                    capture_output=True, text=True)
+    if result.stdout.strip():
+        run(["git", "commit", "-m", "initial commit"])
+        console.print("[green]✓ Initial commit created[/green]")
+    else:
+        console.print("[yellow]No files to commit (empty directory)[/yellow]")
+
+    if not remote:
+        console.print(f"\n[green]Done.[/green] Git repo initialized at ~/{project}")
+        return
+
+    # ── create GitHub repo ────────────────────────────────────────────────────
+    if not shutil.which("gh"):
+        console.print(
+            "\n[yellow]'gh' CLI not found — skipping GitHub repo creation.[/yellow]\n"
+            f"To push manually:\n"
+            f"  gh repo create  --source ~/{project} --push\n"
+            f"  git -C ~/{project} push -u origin main"
+        )
+        return
+
+    repo_name = project_path.name
+    visibility = "--private" if private else "--public"
+    console.print(f"\nCreating GitHub repo [bold]{repo_name}[/bold] ({visibility[2:]})…")
+
+    try:
+        run(["gh", "repo", "create", repo_name, visibility, "--source", ".", "--push"])
+        console.print(f"[green]✓ Pushed to GitHub:[/green] {repo_name}")
+    except sp.CalledProcessError:
+        console.print(
+            f"\n[red]GitHub repo creation failed.[/red] "
+            f"Try manually:\n  gh repo create {repo_name} {visibility} --source . --push"
+        )
         console.print(t)

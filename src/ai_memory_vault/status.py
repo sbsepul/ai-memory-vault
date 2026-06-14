@@ -42,8 +42,25 @@ class StatusReport:
 
     @property
     def orphan(self) -> set[str]:
-        """AI history pointing to paths that no longer exist on disk."""
+        """AI history pointing to paths that no longer exist as git repos on disk."""
         return self.ai_paths - self.disk_repos
+
+    @property
+    def orphan_exists_no_git(self) -> set[str]:
+        """Orphan paths that exist on disk with files but have no .git.
+        Parent directories of known git repos are excluded."""
+        result = set()
+        for p in self.orphan:
+            full = _HOME / p
+            if full.exists() and not (full / ".git").exists():
+                if not any(r.startswith(p + "/") for r in self.disk_repos):
+                    result.add(p)
+        return result
+
+    @property
+    def orphan_missing(self) -> set[str]:
+        """Orphan paths whose directory doesn't exist on disk at all."""
+        return {p for p in self.orphan if not (_HOME / p).exists()}
 
     def orphan_stats(self, sessions: list[Session]) -> dict[str, tuple[int, int]]:
         """Return {rel_path: (n_sessions, n_messages)} for orphan paths."""
