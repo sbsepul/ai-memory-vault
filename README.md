@@ -6,25 +6,30 @@
 
 <table>
 <tr>
-<td align="center" width="160">
+<td align="center" width="140">
 <img src="docs/assets/claude-code-logo.png" width="64" height="64" alt="Claude Code" /><br/>
 <b>Claude Code</b><br/>
-<sub>by Anthropic</sub>
+<sub>by Anthropic ✅</sub>
 </td>
-<td align="center" width="160">
+<td align="center" width="140">
 <img src="docs/assets/codex-logo.png" width="64" height="64" alt="Codex CLI" /><br/>
 <b>Codex CLI</b><br/>
-<sub>by OpenAI</sub>
+<sub>by OpenAI ✅</sub>
 </td>
-<td align="center" width="160">
-<img src="https://img.shields.io/badge/Cursor-coming%20soon-lightgrey" alt="Cursor" /><br/>
-<b>Cursor</b><br/>
-<sub>coming soon</sub>
+<td align="center" width="140">
+<img src="docs/assets/opencode-logo.png" width="64" height="64" alt="opencode" /><br/>
+<b>opencode</b><br/>
+<sub>by SST 🔜</sub>
 </td>
-<td align="center" width="160">
-<img src="https://img.shields.io/badge/Windsurf-coming%20soon-lightgrey" alt="Windsurf" /><br/>
-<b>Windsurf</b><br/>
-<sub>coming soon</sub>
+<td align="center" width="140">
+<img src="docs/assets/antigravity-logo.png" width="64" height="64" alt="Antigravity CLI" /><br/>
+<b>Antigravity CLI</b><br/>
+<sub>by Google 🔜</sub>
+</td>
+<td align="center" width="140">
+<img src="docs/assets/github-copilot-logo.png" width="64" height="64" alt="GitHub Copilot CLI" /><br/>
+<b>Copilot CLI</b><br/>
+<sub>by GitHub 🔜</sub>
 </td>
 </tr>
 </table>
