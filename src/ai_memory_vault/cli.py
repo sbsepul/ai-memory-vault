@@ -279,7 +279,9 @@ def cmd_export(source: str, output: str, project: str | None, fmt: str, since: s
               type=click.Path(), help="Local export directory to commit.")
 @click.option("--since", default=None, metavar="DATE",
               help="Only export sessions updated after DATE before pushing.")
-def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None):
+@click.option("--include-raw", is_flag=True, default=False,
+              help="Also backup raw Claude JSONL files (enables full restore on another machine).")
+def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None, include_raw: bool):
     """Export sessions and push them to a private git repository."""
     from .sync.git import push_to_vault
 
@@ -294,11 +296,110 @@ def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None
 
     with console.status("Pushing to vault repo…"):
         try:
-            msg = push_to_vault(output_path, vault_repo)
+            msg = push_to_vault(output_path, vault_repo, include_raw=include_raw)
             if msg == "nothing to commit":
                 console.print("[yellow]Nothing new to push — vault is already up to date.[/yellow]")
             else:
                 console.print(f"[green]✓ Pushed:[/green] {msg}")
+                if include_raw:
+                    console.print(
+                        "[dim]Raw Claude JSONL files included — "
+                        "use [bold]vault pull --restore-claude[/bold] on the new machine.[/dim]"
+                    )
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
             sys.exit(1)
+
+
+# ── pull ─────────────────────────────────────────────────────────────────────
+
+@main.command("pull")
+@click.option("--vault-repo", default=None, metavar="URL",
+              help="Private git repo URL (saved after first use).")
+@click.option("--output", "-o", default=str(DEFAULT_OUTPUT), show_default=True,
+              type=click.Path(), help="Where to place the downloaded export files.")
+@click.option("--restore-claude", is_flag=True, default=False,
+              help=(
+                  "Restore raw Claude JSONL files to ~/.claude/projects/, "
+                  "re-encoding paths for this machine. "
+                  "Requires a prior push with --include-raw."
+              ))
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show what would be restored without writing anything.")
+def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run: bool):
+    """Pull conversation history from the vault repo to this machine.
+
+    \b
+    Two modes:
+      Default          — downloads Markdown exports for browsing (always works).
+      --restore-claude — also restores Claude Code sessions so Claude can load
+                         them natively. Requires a prior push with --include-raw.
+
+    \b
+    Path remapping is automatic: sessions pushed from /home/alice/repos/project
+    are restored to /home/bob/repos/project on the new machine, because vault
+    stores only the relative path (repos/project).
+    """
+    from .sync.git import pull_from_vault
+    from rich.table import Table
+
+    output_path = Path(output)
+
+    with console.status("Pulling from vault repo…"):
+        try:
+            result = pull_from_vault(
+                vault_repo,
+                output_path,
+                restore_claude=restore_claude,
+                dry_run=dry_run,
+            )
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            sys.exit(1)
+
+    prefix = "[dim][dry-run][/dim] " if dry_run else ""
+
+    # ── exports ───────────────────────────────────────────────────────────────
+    if result.export_files:
+        console.print(
+            f"{prefix}[green]✓ {result.export_files} Markdown files[/green] "
+            f"→ [cyan]{output_path}[/cyan]"
+        )
+    elif not dry_run:
+        console.print(
+            "[yellow]No Markdown exports found in vault "
+            "(run vault push first).[/yellow]"
+        )
+
+    # ── claude restore ────────────────────────────────────────────────────────
+    if restore_claude:
+        if not result.restored_sessions:
+            console.print(
+                "[yellow]No raw Claude sessions found in vault. "
+                "Re-run push with --include-raw first.[/yellow]"
+            )
+        else:
+            home = Path.home()
+            claude_projects = home / ".claude" / "projects"
+
+            table = Table(
+                title=f"{'[dry-run] ' if dry_run else ''}Claude sessions restored",
+                show_lines=False,
+            )
+            table.add_column("Project (rel. to ~)", style="cyan")
+            table.add_column("→ ~/.claude/projects/ slug", style="dim")
+
+            seen_paths: set[str] = set()
+            for rel_path, slug in result.restored_sessions:
+                if rel_path not in seen_paths:
+                    table.add_row(rel_path, slug)
+                    seen_paths.add(rel_path)
+
+            console.print(table)
+
+            if not dry_run:
+                console.print(
+                    f"\n{prefix}[green]✓ {len(result.restored_sessions)} session files[/green] "
+                    f"restored to [cyan]{claude_projects}[/cyan]\n"
+                    "[dim]Restart Claude Code to pick up the restored sessions.[/dim]"
+                )

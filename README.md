@@ -120,28 +120,60 @@ Output structure mirrors `source/project_rel_path/`:
 ```
 
 ### `vault push`
-Export and commit everything to a private git repository for backup.
+Export and commit to a private git repository.
 
 ```bash
-# First time: point to your private vault repo
+# First time: set the private vault repo URL (saved for future runs)
 vault push --vault-repo git@github.com:youruser/my-private-vault.git
 
-# Subsequent pushes (repo remembered in ~/.config/ai-memory-vault/config.json)
+# Subsequent pushes
 vault push
-vault push --source codex --project falabella
+
+# Also backup raw Claude JSONL files so the new machine can fully restore them
+vault push --include-raw
 ```
+
+### `vault pull`
+Pull conversation history from the vault repo to this machine.
+
+```bash
+# Download Markdown exports for browsing (always works)
+vault pull --vault-repo git@github.com:youruser/my-private-vault.git
+
+# Also restore Claude Code sessions natively (requires prior push --include-raw)
+vault pull --restore-claude
+
+# Preview what would be restored without writing anything
+vault pull --restore-claude --dry-run
+```
+
+Path remapping is **automatic**: a session from `/home/alice/repos/project`
+is restored to `~/.claude/projects/-home-bob-repos-project/` on the new
+machine — no manual editing needed.
 
 ## Cross-machine migration
 
-```bash
-# Machine A (old)
-vault export --format json --output ./vault-backup
-# commit vault-backup/ to your private repo and push
-
-# Machine B (new)
-git clone <private-vault-repo>
-# sessions are readable as Markdown, paths are relative to $HOME
 ```
+# ── Machine A (source) ──────────────────────────────────────────────────────
+
+# Backup Markdown exports + raw Claude JSONL to a private repo
+vault push --vault-repo git@github.com:youruser/vault.git --include-raw
+
+# ── Machine B (destination) ─────────────────────────────────────────────────
+
+git clone https://github.com/sbsepul/ai-memory-vault.git
+cd ai-memory-vault && python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+
+# Download exports and restore Claude sessions (paths re-encoded for this machine)
+vault pull --vault-repo git@github.com:youruser/vault.git --restore-claude
+
+# Restart Claude Code — it will pick up the restored sessions automatically
+```
+
+The vault stores paths relative to `$HOME` (`repos/dream-home`, not
+`/home/alice/repos/dream-home`), so restoration works across different
+usernames, operating systems, and home directory layouts.
 
 ## Storage formats decoded
 
@@ -153,7 +185,8 @@ Sessions are JSONL files. Messages live inside `event_msg` events with `payload.
 
 ## Roadmap
 
-- [ ] `vault pull` — restore sessions to a new machine, remapping paths
+- [x] `vault pull` — restore sessions to a new machine with automatic path remapping
+- [ ] `vault pull --restore-codex` — restore Codex sessions (SQLite rebuild)
 - [ ] `vault serve` — local web viewer for browsing conversations
 - [ ] Incremental export (only new sessions since last run)
 - [ ] Cursor and Windsurf support
