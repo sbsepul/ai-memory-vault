@@ -40,6 +40,25 @@ def _apply_map_to_sessions(sessions, path_map: dict) -> list:
             s.has_git = (_HOME / canonical / ".git").exists()
     return sessions
 
+
+def _resolve_to_git_root(sessions) -> list:
+    """Remap sessions that sit inside a git repo (but are not the root)
+    to the nearest ancestor directory that contains .git."""
+    for s in sessions:
+        if s.has_git:
+            continue
+        full = _HOME / s.project_rel_path
+        if not full.exists():
+            continue
+        current = full.parent
+        while current != _HOME and current != current.parent:
+            if (current / ".git").exists():
+                s.project_rel_path = str(current.relative_to(_HOME))
+                s.has_git = True
+                break
+            current = current.parent
+    return sessions
+
 SOURCE_OPTION = click.option(
     "--source", default="all",
     type=click.Choice(["all", "claude", "codex"]),
@@ -61,6 +80,9 @@ def _load_sessions(source: str, since: str | None = None):
     path_map = load_path_map()
     if path_map:
         sessions = _apply_map_to_sessions(sessions, path_map)
+
+    # Remap sessions inside a git repo to the git root of that repo
+    sessions = _resolve_to_git_root(sessions)
 
     if since:
         try:
