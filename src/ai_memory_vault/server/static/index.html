@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Memory Vault</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1c2128;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --blue-dim: #1d2d5e;
+      --green-dim: #1a3022;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 16px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+    .logo { font-weight: 600; font-size: 15px; letter-spacing: -0.2px; }
+    .logo span { color: var(--accent); }
+    .tabs { display: flex; gap: 2px; }
+    .tab {
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--muted);
+      background: none;
+      transition: color 0.1s, background 0.1s;
+    }
+    .tab:hover { color: var(--text); background: var(--surface2); }
+    .tab.active { background: var(--border); color: var(--text); }
+    #stats { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+    /* ── Layout ─────────────────────────────────────────────────────────────── */
+    .layout { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Sidebar ────────────────────────────────────────────────────────────── */
+    .sidebar {
+      width: 260px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .sidebar-header {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    #project-count { font-weight: 400; }
+    .project-list { overflow-y: auto; flex: 1; }
+    .project-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-left: 2px solid transparent;
+      transition: background 0.1s;
+    }
+    .project-item:hover { background: var(--surface); }
+    .project-item.active { background: var(--surface); border-left-color: var(--accent); }
+    .project-info { flex: 1; min-width: 0; }
+    .project-name {
+      font-size: 13px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .project-path { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    .src-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+    }
+    .src-dot.claude { background: #79c0ff; }
+    .src-dot.codex  { background: #56d364; }
+    .project-sessions { font-size: 11px; color: var(--muted); }
+
+    /* ── Main ───────────────────────────────────────────────────────────────── */
+    .main { flex: 1; display: flex; overflow: hidden; }
+
+    /* ── Session list panel ─────────────────────────────────────────────────── */
+    #session-panel {
+      width: 300px;
+      border-right: 1px solid var(--border);
+      display: none;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    #session-panel.visible { display: flex; }
+    .panel-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .panel-title { font-weight: 600; font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .panel-meta { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+    #session-list { overflow-y: auto; flex: 1; }
+    .session-item {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: background 0.1s;
+    }
+    .session-item:hover { background: var(--surface); }
+    .session-item.active { background: var(--surface); border-left-color: var(--accent); }
+    .session-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .session-name {
+      flex: 1; font-size: 13px; font-weight: 500;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .badge {
+      font-size: 10px; padding: 1px 6px; border-radius: 10px;
+      font-weight: 600; flex-shrink: 0;
+    }
+    .badge.claude { background: var(--blue-dim); color: #79c0ff; }
+    .badge.codex  { background: var(--green-dim); color: #56d364; }
+    .session-meta { display: flex; gap: 8px; font-size: 11px; color: var(--muted); }
+
+    /* ── Session viewer ─────────────────────────────────────────────────────── */
+    #viewer { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    #welcome {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      color: var(--muted); gap: 8px; text-align: center;
+    }
+    #welcome h2 { color: var(--text); font-size: 20px; margin-bottom: 4px; }
+    #welcome p { font-size: 13px; }
+    #viewer-header { display: none; }
+    #messages {
+      flex: 1; overflow-y: auto; padding: 20px;
+      display: none; flex-direction: column; gap: 16px;
+    }
+    .message {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      line-height: 1.6;
+      word-break: break-word;
+    }
+    .message.user {
+      background: var(--blue-dim);
+      align-self: flex-end;
+      border-bottom-right-radius: 2px;
+    }
+    .message.assistant {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      align-self: flex-start;
+      border-bottom-left-radius: 2px;
+    }
+    .msg-role {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.5px; color: var(--muted); margin-bottom: 6px;
+    }
+    .msg-body { white-space: pre-wrap; font-size: 13px; }
+    .msg-body pre {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 12px; overflow-x: auto;
+      margin: 8px 0; font-size: 12px; white-space: pre;
+    }
+    .msg-body code { font-family: "SF Mono", "Fira Code", Consolas, monospace; }
+    .msg-body p { margin-bottom: 4px; }
+    .msg-body p:last-child { margin-bottom: 0; }
+
+    /* ── Shared states ──────────────────────────────────────────────────────── */
+    .loading, .empty {
+      padding: 32px; text-align: center; color: var(--muted); font-size: 13px;
+    }
+    .spinner {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+      vertical-align: middle; margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<header>
+  <span class="logo">⬡ <span>AI Memory Vault</span></span>
+  <div class="tabs">
+    <button class="tab active" data-source="">All</button>
+    <button class="tab" data-source="claude">Claude Code</button>
+    <button class="tab" data-source="codex">Codex CLI</button>
+  </div>
+  <span id="stats"></span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <span>Projects</span>
+      <span id="project-count"></span>
+    </div>
+    <div class="project-list" id="project-list">
+      <div class="loading"><span class="spinner"></span>Loading…</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div id="session-panel">
+      <div class="panel-header">
+        <span class="panel-title" id="session-panel-title"></span>
+        <span class="panel-meta" id="session-panel-meta"></span>
+      </div>
+      <div id="session-list"></div>
+    </div>
+
+    <div id="viewer">
+      <div id="welcome">
+        <h2>AI Memory Vault</h2>
+        <p>Select a project from the sidebar to browse sessions</p>
+        <p style="margin-top:8px;font-size:12px">
+          <a href="/api/docs" style="color:var(--accent)" target="_blank">API docs</a>
+          &nbsp;·&nbsp;
+          <a href="/api/health" style="color:var(--accent)" target="_blank">health</a>
+        </p>
+      </div>
+      <div class="panel-header" id="viewer-header">
+        <span class="panel-title" id="viewer-title"></span>
+        <span class="panel-meta" id="viewer-meta"></span>
+      </div>
+      <div id="messages"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const state = { source: '', selectedProject: null, selectedSession: null };
+
+  // ── API helpers ─────────────────────────────────────────────────────────────
+
+  const api = {
+    projects: (src) => fetch(`/api/projects${src ? `?source=${src}` : ''}`).then(r => r.json()),
+    sessions: (proj, src) => {
+      const p = new URLSearchParams({ project: proj, limit: '300' });
+      if (src) p.set('source', src);
+      return fetch(`/api/sessions?${p}`).then(r => r.json());
+    },
+    session: (id) => fetch(`/api/sessions/${id}`).then(r => r.json()),
+  };
+
+  // ── Utilities ───────────────────────────────────────────────────────────────
+
+  function esc(s) {
+    return String(s ?? '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return '';
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1)  return 'just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `${d}d ago`;
+    return new Date(iso).toLocaleDateString();
+  }
+
+  function sessionLabel(s) {
+    if (s.name && s.name !== s.project && s.name.length > 2) return s.name;
+    if (s.started_at) {
+      return new Date(s.started_at).toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+    }
+    return s.id.slice(0, 8);
+  }
+
+  // ── Render: projects ────────────────────────────────────────────────────────
+
+  function renderProjects(projects) {
+    const list = document.getElementById('project-list');
+    document.getElementById('project-count').textContent = projects.length;
+
+    const totalSessions = projects.reduce((a, p) => a + p.total_sessions, 0);
+    const totalMsgs = projects.reduce((a, p) => a + p.total_messages, 0);
+    document.getElementById('stats').textContent =
+      `${projects.length} projects · ${totalSessions} sessions · ${totalMsgs.toLocaleString()} msgs`;
+
+    if (!projects.length) {
+      list.innerHTML = '<div class="empty">No projects found</div>';
+      return;
+    }
+
+    list.innerHTML = projects.map(p => {
+      const git = p.has_git ? '✅' : '📂';
+      const dots = Object.keys(p.sources).map(src =>
+        `<span class="src-dot ${esc(src)}" title="${esc(src)}"></span>`
+      ).join('');
+      return `
+        <div class="project-item" data-path="${esc(p.path)}">
+          <span style="font-size:13px">${git}</span>
+          <div class="project-info">
+            <div class="project-name">${esc(p.name)}</div>
+            <div class="project-path">${esc(p.path)}</div>
+          </div>
+          <div class="project-right">
+            ${dots}
+            <span class="project-sessions">${p.total_sessions}</span>
+          </div>
+        </div>`;
+    }).join('');
+
+    list.querySelectorAll('.project-item').forEach(el =>
+      el.addEventListener('click', () => selectProject(el.dataset.path))
+    );
+  }
+
+  // ── Render: sessions ────────────────────────────────────────────────────────
+
+  function renderSessions(sessions) {
+    const list = document.getElementById('session-list');
+    document.getElementById('session-panel-meta').textContent = `${sessions.length} sessions`;
+
+    if (!sessions.length) {
+      list.innerHTML = '<div class="empty">No sessions found</div>';
+      return;
+    }
+
+    list.innerHTML = sessions.map(s => `
+      <div class="session-item" data-id="${esc(s.id)}">
+        <div class="session-top">
+          <span class="session-name">${esc(sessionLabel(s))}</span>
+          <span class="badge ${esc(s.source)}">${s.source === 'claude' ? 'Claude' : 'Codex'}</span>
+        </div>
+        <div class="session-meta">
+          <span>${s.message_count} msgs</span>
+          <span>${timeAgo(s.updated_at || s.started_at)}</span>
+        </div>
+      </div>`).join('');
+
+    list.querySelectorAll('.session-item').forEach(el =>
+      el.addEventListener('click', () => selectSession(el.dataset.id))
+    );
+  }
+
+  // ── Render: messages ────────────────────────────────────────────────────────
+
+  function renderContent(text) {
+    // Split out fenced code blocks
+    const parts = text.split(/(```[\s\S]*?```)/g);
+    return '<div class="msg-body">' + parts.map(part => {
+      if (part.startsWith('```') && part.endsWith('```')) {
+        const body = part.slice(3, -3);
+        const nl = body.indexOf('\n');
+        const code = nl >= 0 ? body.slice(nl + 1) : body;
+        return `<pre><code>${esc(code.trimEnd())}</code></pre>`;
+      }
+      // Inline code `...`
+      const withInline = esc(part).replace(/`([^`]+)`/g, '<code>$1</code>');
+      return `<p>${withInline.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
+    }).join('') + '</div>';
+  }
+
+  function renderMessages(messages) {
+    const container = document.getElementById('messages');
+    const visible = messages.filter(m => m.role === 'user' || m.role === 'assistant');
+
+    if (!visible.length) {
+      container.innerHTML = '<div class="empty">No messages</div>';
+      return;
+    }
+
+    container.innerHTML = visible.map(m => {
+      const label = m.role === 'user' ? 'You' : 'Assistant';
+      const time = m.timestamp
+        ? new Date(m.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+        : '';
+      return `
+        <div class="message ${esc(m.role)}">
+          <div class="msg-role">${label}${time ? ` · ${time}` : ''}</div>
+          ${renderContent(m.content)}
+        </div>`;
+    }).join('');
+
+    container.scrollTop = 0;
+  }
+
+  // ── Actions ─────────────────────────────────────────────────────────────────
+
+  async function selectProject(path) {
+    state.selectedProject = path;
+    state.selectedSession = null;
+
+    document.querySelectorAll('.project-item').forEach(el =>
+      el.classList.toggle('active', el.dataset.path === path)
+    );
+
+    const panel = document.getElementById('session-panel');
+    panel.classList.add('visible');
+    document.getElementById('session-panel-title').textContent = path.split('/').pop();
+    document.getElementById('session-panel-meta').textContent = '';
+    document.getElementById('session-list').innerHTML =
+      '<div class="loading"><span class="spinner"></span>Loading…</div>';
+
+    showWelcome();
+
+    const sessions = await api.sessions(path, state.source);
+    renderSessions(sessions);
+  }
+
+  async function selectSession(id) {
+    state.selectedSession = id;
+
+    document.querySelectorAll('.session-item').forEach(el =>
+      el.classList.toggle('active', el.dataset.id === id)
+    );
+
+    document.getElementById('welcome').style.display = 'none';
+    document.getElementById('viewer-header').style.display = 'flex';
+    document.getElementById('messages').style.display = 'flex';
+    document.getElementById('viewer-title').textContent = 'Loading…';
+    document.getElementById('viewer-meta').textContent = '';
+    document.getElementById('messages').innerHTML =
+      '<div class="loading"><span class="spinner"></span>Loading messages…</div>';
+
+    const session = await api.session(id);
+    document.getElementById('viewer-title').textContent = sessionLabel(session);
+    document.getElementById('viewer-meta').textContent =
+      `${session.message_count} messages · ${session.started_at ? new Date(session.started_at).toLocaleDateString() : ''}`;
+    renderMessages(session.messages || []);
+  }
+
+  function showWelcome() {
+    document.getElementById('welcome').style.display = 'flex';
+    document.getElementById('viewer-header').style.display = 'none';
+    document.getElementById('messages').style.display = 'none';
+  }
+
+  // ── Source tabs ─────────────────────────────────────────────────────────────
+
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', async () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      state.source = tab.dataset.source;
+      state.selectedProject = null;
+      state.selectedSession = null;
+      document.getElementById('session-panel').classList.remove('visible');
+      showWelcome();
+      renderProjects(await api.projects(state.source));
+    });
+  });
+
+  // ── Boot ────────────────────────────────────────────────────────────────────
+
+  api.projects('').then(renderProjects);
+</script>
+</body>
+</html>
