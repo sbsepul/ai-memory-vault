@@ -19,7 +19,8 @@ CODEX_SESSION_INDEX = CODEX_DIR / "session_index.jsonl"
 # ── vault config & local cache ────────────────────────────────────────────────
 CONFIG_DIR    = HOME / ".config" / "ai-memory-vault"
 CONFIG_FILE   = CONFIG_DIR / "config.json"
-PATH_MAP_FILE = CONFIG_DIR / "path-map.json"
+PATH_MAP_FILE      = CONFIG_DIR / "path-map.json"
+SKIP_NAMES_FILE    = CONFIG_DIR / "skip-names.json"
 VAULT_LOCAL   = HOME / ".local" / "share" / "ai-memory-vault" / "vault"
 
 # ── vault repo layout ─────────────────────────────────────────────────────────
