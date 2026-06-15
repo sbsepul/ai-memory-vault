@@ -34,7 +34,7 @@ export default function App() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar: Projects */}
-        <aside className="w-64 border-r border-vault-border flex flex-col shrink-0 overflow-hidden">
+        <aside className="w-72 border-r border-vault-border flex flex-col shrink-0 overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2.5 border-b border-vault-border">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-vault-muted">
               Projects

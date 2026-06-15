@@ -1,10 +1,10 @@
-"""Extract sessions from Codex CLI (~/.codex/sessions/)."""
+"""Extractor for Codex CLI (~/.codex/sessions/)."""
 from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
 
-from .models import Message, Session
+from .models import BaseExtractor, Message, Session
 from ..config import HOME, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX
 from ..utils import rel_path_from_cwd, parse_iso_timestamp
 
@@ -37,9 +37,11 @@ def _parse_content(content) -> str:
         parts = []
         for item in content:
             if isinstance(item, dict):
-                if item.get("type") == "text":
+                item_type = item.get("type", "")
+                # "text" (new format) or "input_text" (old format)
+                if item_type in ("text", "input_text"):
                     parts.append(item.get("text", ""))
-                elif item.get("type") == "tool_result":
+                elif item_type == "tool_result":
                     parts.append(_parse_content(item.get("content", "")))
         return "\n".join(p for p in parts if p)
     return ""
@@ -57,6 +59,28 @@ def _parse_session_file(
     if not raw_lines:
         return None
 
+    # Detect format from first non-empty line
+    first = next((l.strip() for l in raw_lines if l.strip()), None)
+    if not first:
+        return None
+    try:
+        first_event = json.loads(first)
+    except json.JSONDecodeError:
+        return None
+
+    # Old format: first line has {id, timestamp, instructions, git} and messages
+    # use {type: "message", role: ..., content: ...}
+    if "instructions" in first_event and "git" in first_event:
+        return _parse_old_format(jsonl_path, raw_lines, first_event, thread_names)
+
+    return _parse_new_format(jsonl_path, raw_lines, thread_names)
+
+
+def _parse_new_format(
+    jsonl_path: Path,
+    raw_lines: list[str],
+    thread_names: dict[str, str],
+) -> Session | None:
     session_id: str | None = None
     project_rel_path: str = ""
     thread_name: str = ""
@@ -129,17 +153,89 @@ def _parse_session_file(
     )
 
 
-def extract_all(sessions_dir: Path = CODEX_SESSIONS_DIR) -> list[Session]:
-    """Return all Codex sessions with relative project paths."""
-    thread_names = _load_thread_names()
-    sessions: list[Session] = []
+def _parse_old_format(
+    jsonl_path: Path,
+    raw_lines: list[str],
+    header: dict,
+    thread_names: dict[str, str],
+) -> Session | None:
+    """Parse pre-2025 Codex JSONL: header line + {type:'message', role, content} lines."""
+    session_id = header.get("id", jsonl_path.stem)
+    ts_str = header.get("timestamp", "")
+    started_at = parse_iso_timestamp(ts_str) if ts_str else None
+    updated_at = started_at
+    messages: list[Message] = []
 
-    if not sessions_dir.exists():
+    for raw in raw_lines[1:]:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        if event.get("type") != "message":
+            continue
+
+        role = event.get("role", "")
+        if role not in ("user", "assistant"):
+            continue
+
+        content = event.get("content", "")
+        text = _parse_content(content) if isinstance(content, list) else str(content)
+        text = text.strip()
+        if not text:
+            continue
+
+        ts = parse_iso_timestamp(event.get("timestamp", "")) if event.get("timestamp") else None
+        if ts and (updated_at is None or ts > updated_at):
+            updated_at = ts
+
+        messages.append(Message(role=role, content=text, timestamp=ts))
+
+    if not messages:
+        return None
+
+    thread_name = thread_names.get(session_id, "")
+    name = thread_name or session_id
+    return Session(
+        id=session_id,
+        source="codex",
+        project_rel_path="",
+        name=name,
+        started_at=started_at,
+        updated_at=updated_at,
+        messages=messages,
+        has_git=False,
+    )
+
+
+class CodexExtractor(BaseExtractor):
+    label = "Codex CLI"
+    source = "codex"
+
+    def __init__(self, sessions_dir: Path = CODEX_SESSIONS_DIR) -> None:
+        self._dir = sessions_dir
+
+    def is_available(self) -> bool:
+        return self._dir.exists()
+
+    def extract_all(self) -> list[Session]:
+        thread_names = _load_thread_names()
+        sessions: list[Session] = []
+
+        if not self._dir.exists():
+            return sessions
+
+        for jsonl_file in sorted(self._dir.rglob("*.jsonl")):
+            session = _parse_session_file(jsonl_file, thread_names)
+            if session:
+                sessions.append(session)
+
         return sessions
 
-    for jsonl_file in sorted(sessions_dir.rglob("*.jsonl")):
-        session = _parse_session_file(jsonl_file, thread_names)
-        if session:
-            sessions.append(session)
 
-    return sessions
+# Module-level convenience kept for backwards compatibility
+def extract_all(sessions_dir: Path = CODEX_SESSIONS_DIR) -> list[Session]:
+    return CodexExtractor(sessions_dir).extract_all()

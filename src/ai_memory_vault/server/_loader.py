@@ -2,20 +2,19 @@
 from __future__ import annotations
 import time
 
-
 _cache: dict = {"sessions": None, "loaded_at": 0.0}
 _CACHE_TTL = 60
 
 
 def get_all_sessions():
-    from ..extractors import claude as claude_ext
-    from ..extractors import codex as codex_ext
+    from ..extractors import EXTRACTORS
 
     now = time.monotonic()
     if _cache["sessions"] is None or (now - _cache["loaded_at"]) > _CACHE_TTL:
         sessions = []
-        sessions.extend(claude_ext.extract_all())
-        sessions.extend(codex_ext.extract_all())
+        for extractor in EXTRACTORS:
+            if extractor.is_available():
+                sessions.extend(extractor.extract_all())
         _cache["sessions"] = sessions
         _cache["loaded_at"] = now
 

@@ -40,7 +40,7 @@ def _to_dict(s, *, include_messages: bool = False) -> dict:
 def list_sessions(
     source: Optional[str] = Query(None),
     project: Optional[str] = Query(None),
-    limit: int = Query(200, ge=1, le=2000),
+    limit: int = Query(5000, ge=1, le=10000),
 ):
     sessions = get_all_sessions()
     if source:
