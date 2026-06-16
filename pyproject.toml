@@ -32,6 +32,8 @@ classifiers = [
 dependencies = [
     "click>=8.1",
     "rich>=13.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
 ]
 
 [project.optional-dependencies]
