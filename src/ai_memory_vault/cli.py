@@ -354,7 +354,7 @@ def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None
 
     with console.status("Pushing to vault repo…"):
         try:
-            msg = push_to_vault(output_path, vault_repo, include_raw=include_raw)
+            msg = push_to_vault(output_path, vault_repo, include_raw=include_raw, sessions=sessions)
             if msg == "nothing to commit":
                 console.print("[yellow]Nothing new to push — vault is already up to date.[/yellow]")
             else:
@@ -382,9 +382,11 @@ def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None
                   "re-encoding paths for this machine. "
                   "Requires a prior push with --include-raw."
               ))
+@click.option("--clone-repos", is_flag=True, default=False,
+              help="Clone associated GitHub repos that don't exist on this machine.")
 @click.option("--dry-run", is_flag=True, default=False,
-              help="Show what would be restored without writing anything.")
-def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run: bool):
+              help="Show what would be restored/cloned without writing anything.")
+def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, clone_repos: bool, dry_run: bool):
     """Pull conversation history from the vault repo to this machine.
 
     \b
@@ -392,6 +394,7 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run:
       Default          — downloads Markdown exports for browsing (always works).
       --restore-claude — also restores Claude Code sessions so Claude can load
                          them natively. Requires a prior push with --include-raw.
+      --clone-repos    — clones associated GitHub repos that don't exist locally.
 
     \b
     Path remapping is automatic: sessions pushed from /home/alice/repos/project
@@ -409,6 +412,7 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run:
                 vault_repo,
                 output_path,
                 restore_claude=restore_claude,
+                clone_repos=clone_repos,
                 dry_run=dry_run,
             )
         except ValueError as e:
@@ -460,6 +464,33 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run:
                     f"\n{prefix}[green]✓ {len(result.restored_sessions)} session files[/green] "
                     f"restored to [cyan]{claude_projects}[/cyan]\n"
                     "[dim]Restart Claude Code to pick up the restored sessions.[/dim]"
+                )
+
+    # ── clone repos ───────────────────────────────────────────────────────────
+    if clone_repos:
+        if not result.cloned_repos:
+            manifest_exists = (result.vault_local / "repos.json").exists()
+            if not manifest_exists:
+                console.print(
+                    "[yellow]No repos.json found in vault. "
+                    "Re-run vault push to generate it.[/yellow]"
+                )
+            else:
+                console.print("[dim]All repos already exist on this machine.[/dim]")
+        else:
+            from rich.table import Table as _Table
+            table = _Table(
+                title=f"{'[dry-run] ' if dry_run else ''}Repos cloned",
+                show_lines=False,
+            )
+            table.add_column("Project (rel. to ~)", style="cyan")
+            table.add_column("Remote", style="dim")
+            for rel_path, remote_url in result.cloned_repos:
+                table.add_row(rel_path, remote_url)
+            console.print(table)
+            if not dry_run:
+                console.print(
+                    f"\n{prefix}[green]✓ {len(result.cloned_repos)} repos cloned[/green]"
                 )
 
 
