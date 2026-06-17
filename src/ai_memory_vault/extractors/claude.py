@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .models import BaseExtractor, Message, Session
 from ..config import HOME, CLAUDE_PROJECTS_DIR
-from ..utils import rel_path_from_cwd, parse_iso_timestamp
+from ..utils import rel_path_from_cwd, parse_iso_timestamp, read_git_remote
 
 # Files that are not conversation logs
 _SKIP_NAMES = {"skill-injections.jsonl"}
@@ -90,7 +90,8 @@ def _parse_session_file(jsonl_path: Path, slug_rel_path: str) -> Session | None:
 
     project_rel_path = cwd_rel_path or slug_rel_path
     name = project_rel_path.split("/")[-1] if project_rel_path else jsonl_path.stem
-    has_git = (HOME / project_rel_path / ".git").exists()
+    project_dir = HOME / project_rel_path
+    has_git = (project_dir / ".git").exists()
 
     return Session(
         id=jsonl_path.stem,
@@ -101,6 +102,7 @@ def _parse_session_file(jsonl_path: Path, slug_rel_path: str) -> Session | None:
         updated_at=updated_at,
         messages=messages,
         has_git=has_git,
+        git_remote=read_git_remote(project_dir) if has_git else None,
     )
 
 

@@ -18,4 +18,6 @@ __all__ = [
     "push_to_vault",
     "restore_raw_claude",
     "save_config",
+    "_write_repo_manifest",
+    "_clone_repos",
 ]

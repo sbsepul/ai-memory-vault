@@ -298,7 +298,9 @@ def cmd_push(
 
     with console.status("Pushing to vault repo…"):
         try:
-            message = push_to_vault(output_path, vault_repo, include_raw=include_raw)
+            message = push_to_vault(
+                output_path, vault_repo, include_raw=include_raw, sessions=sessions
+            )
         except ValueError as error:
             console.print(f"[red]{error}[/red]")
             raise SystemExit(1) from error
@@ -337,12 +339,24 @@ def cmd_push(
     help="Restore raw Claude JSONL files to ~/.claude/projects/.",
 )
 @click.option(
+    "--clone-repos",
+    is_flag=True,
+    default=False,
+    help="Clone associated GitHub repos that don't exist on this machine.",
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     default=False,
-    help="Show what would be restored without writing anything.",
+    help="Show what would be restored/cloned without writing anything.",
 )
-def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run: bool) -> None:
+def cmd_pull(
+    vault_repo: str | None,
+    output: str,
+    restore_claude: bool,
+    clone_repos: bool,
+    dry_run: bool,
+) -> None:
     output_path = Path(output)
     with console.status("Pulling from vault repo…"):
         try:
@@ -350,6 +364,7 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run:
                 vault_repo,
                 output_path,
                 restore_claude=restore_claude,
+                clone_repos=clone_repos,
                 dry_run=dry_run,
             )
         except ValueError as error:
@@ -392,6 +407,31 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, dry_run:
                 f"\n{prefix}[green]✓ {len(result.restored_sessions)} session files[/green] "
                 f"restored to [cyan]{Path.home() / '.claude' / 'projects'}[/cyan]"
             )
+
+    if clone_repos:
+        if not result.cloned_repos:
+            manifest_exists = (result.vault_local / "repos.json").exists()
+            if not manifest_exists:
+                console.print(
+                    "[yellow]No repos.json found in vault. "
+                    "Re-run vault push to generate it.[/yellow]"
+                )
+            else:
+                console.print("[dim]All repos already exist on this machine.[/dim]")
+        else:
+            table = Table(
+                title=f"{'[dry-run] ' if dry_run else ''}Repos cloned",
+                show_lines=False,
+            )
+            table.add_column("Project (rel. to ~)", style="cyan")
+            table.add_column("Remote", style="dim")
+            for rel_path, remote_url in result.cloned_repos:
+                table.add_row(rel_path, remote_url)
+            console.print(table)
+            if not dry_run:
+                console.print(
+                    f"\n{prefix}[green]✓ {len(result.cloned_repos)} repos cloned[/green]"
+                )
 
 
 @main.command("memories")

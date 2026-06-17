@@ -26,6 +26,7 @@ class Session:
     updated_at: datetime | None
     messages: list[Message] = field(default_factory=list)
     has_git: bool = False
+    git_remote: str | None = None
 
     @property
     def message_count(self) -> int:

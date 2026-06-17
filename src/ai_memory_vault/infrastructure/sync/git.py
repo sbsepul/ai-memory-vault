@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ...config import (
     CLAUDE_PROJECTS_DIR,
@@ -16,7 +17,11 @@ from ...config import (
     VAULT_EXPORTS_SUBDIR,
     VAULT_LOCAL,
     VAULT_RAW_CLAUDE_SUBDIR,
+    VAULT_REPO_MANIFEST,
 )
+
+if TYPE_CHECKING:
+    from ...domain.models import Session
 
 
 def load_config() -> dict:
@@ -80,6 +85,44 @@ def _encode_claude_slug(rel_path: str) -> str:
     return str(HOME / rel_path).replace("/", "-")
 
 
+def _write_repo_manifest(sessions: list[Session], vault_local: Path) -> int:
+    """Write repos.json mapping project_rel_path → git_remote for every project with a remote."""
+    manifest: dict[str, str] = {}
+    for s in sessions:
+        if s.git_remote and s.project_rel_path not in manifest:
+            manifest[s.project_rel_path] = s.git_remote
+    if not manifest:
+        return 0
+    (vault_local / VAULT_REPO_MANIFEST).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True)
+    )
+    return len(manifest)
+
+
+def _clone_repos(vault_local: Path, dry_run: bool = False) -> list[tuple[str, str]]:
+    """Clone repos listed in repos.json that don't exist on this machine yet."""
+    manifest_path = vault_local / VAULT_REPO_MANIFEST
+    if not manifest_path.exists():
+        return []
+
+    manifest: dict[str, str] = json.loads(manifest_path.read_text())
+    cloned: list[tuple[str, str]] = []
+
+    for rel_path, remote_url in manifest.items():
+        project_dir = HOME / rel_path
+        if project_dir.exists():
+            continue
+        if dry_run:
+            cloned.append((rel_path, remote_url))
+            continue
+        project_dir.parent.mkdir(parents=True, exist_ok=True)
+        code, _ = _run(["git", "clone", remote_url, str(project_dir)], cwd=HOME)
+        if code == 0:
+            cloned.append((rel_path, remote_url))
+
+    return cloned
+
+
 def backup_raw_claude(vault_local: Path) -> int:
     if not CLAUDE_PROJECTS_DIR.exists():
         return 0
@@ -130,6 +173,7 @@ def push_to_vault(
     *,
     include_raw: bool = False,
     message: str | None = None,
+    sessions: list[Session] | None = None,
 ) -> str:
     resolved_repo = _resolve_vault_repo(vault_repo)
     vault_local = _ensure_vault_local(resolved_repo)
@@ -142,6 +186,10 @@ def push_to_vault(
         )
 
     raw_count = backup_raw_claude(vault_local) if include_raw else 0
+
+    if sessions:
+        _write_repo_manifest(sessions, vault_local)
+
     _run(["git", "add", "-A"], cwd=vault_local)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -167,6 +215,7 @@ class PullResult:
     def __init__(self) -> None:
         self.export_files: int = 0
         self.restored_sessions: list[tuple[str, str]] = []
+        self.cloned_repos: list[tuple[str, str]] = []
         self.vault_local: Path = VAULT_LOCAL
         self.already_up_to_date: bool = False
 
@@ -176,6 +225,7 @@ def pull_from_vault(
     output_dir: Path,
     *,
     restore_claude: bool = False,
+    clone_repos: bool = False,
     dry_run: bool = False,
 ) -> PullResult:
     resolved_repo = _resolve_vault_repo(vault_repo)
@@ -194,5 +244,8 @@ def pull_from_vault(
 
     if restore_claude:
         result.restored_sessions = restore_raw_claude(vault_local, dry_run=dry_run)
+
+    if clone_repos:
+        result.cloned_repos = _clone_repos(vault_local, dry_run=dry_run)
 
     return result

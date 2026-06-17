@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from .config import HOME
+from .config import GIT_REMOTE_TIMEOUT_S, HOME
 
 
 def rel_path_from_cwd(cwd: str) -> str:
@@ -31,6 +32,22 @@ def parse_iso_timestamp(ts_raw: str) -> datetime | None:
 def fmt_ts(ts: datetime | None, fmt: str = "%Y-%m-%d %H:%M") -> str:
     """Format a datetime for display; returns '?' when ts is None."""
     return ts.strftime(fmt) if ts else "?"
+
+
+def read_git_remote(project_dir: Path) -> str | None:
+    """Return the origin remote URL for a git repo, or None if absent/unreachable."""
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=GIT_REMOTE_TIMEOUT_S,
+        )
+        url = result.stdout.strip()
+        return url if result.returncode == 0 and url else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
 
 
 def find_latest_sqlite(directory: Path, prefix: str) -> Path | None:

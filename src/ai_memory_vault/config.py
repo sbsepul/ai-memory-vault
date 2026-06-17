@@ -26,6 +26,7 @@ VAULT_LOCAL   = HOME / ".local" / "share" / "ai-memory-vault" / "vault"
 # ── vault repo layout ─────────────────────────────────────────────────────────
 VAULT_EXPORTS_SUBDIR    = "exports"
 VAULT_RAW_CLAUDE_SUBDIR = "raw/claude"
+VAULT_REPO_MANIFEST     = "repos.json"
 
 # ── CLI defaults ──────────────────────────────────────────────────────────────
 DEFAULT_OUTPUT_DIR    = HOME / "ai-memory-vault-export"
