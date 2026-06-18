@@ -1,94 +1,79 @@
-"""vault setup — guided onboarding wizard."""
+"""Guided onboarding for registered CLI agent integrations."""
+
 from __future__ import annotations
-from pathlib import Path
+
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
-import click
 
-from .config import (
-    CLAUDE_PROJECTS_DIR, CODEX_SESSIONS_DIR, CONFIG_DIR, CONFIG_FILE
-)
+from .agents import AGENTS
 
 console = Console()
 
 
 def detect_tools() -> dict[str, dict | None]:
-    """Detect installed AI tools and count their sessions."""
+    """Detect registered agents from metadata owned by their adapters."""
     tools: dict[str, dict | None] = {}
-
-    # Claude Code
-    if CLAUDE_PROJECTS_DIR.exists():
-        jsonl_files = list(CLAUDE_PROJECTS_DIR.rglob("*.jsonl"))
-        tools["claude"] = {
-            "sessions": len(jsonl_files),
-            "label": "Claude Code",
-            "data_dir": str(CLAUDE_PROJECTS_DIR),
-        }
-    else:
-        tools["claude"] = None
-
-    # Codex CLI
-    if CODEX_SESSIONS_DIR.exists():
-        jsonl_files = list(CODEX_SESSIONS_DIR.rglob("*.jsonl"))
-        tools["codex"] = {
-            "sessions": len(jsonl_files),
-            "label": "Codex CLI",
-            "data_dir": str(CODEX_SESSIONS_DIR),
-        }
-    else:
-        tools["codex"] = None
-
-    # Future tools (not yet implemented)
-    tools["cursor"] = None
-    tools["windsurf"] = None
-
+    for adapter in AGENTS.select():
+        data_root = adapter.native_data_root()
+        tools[adapter.source] = (
+            {
+                "sessions": len(adapter.iter_local_native_sessions()),
+                "label": adapter.label,
+                "data_dir": str(data_root),
+            }
+            if data_root and data_root.exists()
+            else None
+        )
     return tools
 
 
 def show_detection_panel(tools: dict) -> None:
-    """Display detected AI tools in a rich panel."""
     lines = []
     for name, info in tools.items():
-        label = info["label"] if info else name.capitalize()
+        label = info["label"] if info else AGENTS.get(name).label
         if info:
-            lines.append(f"  [green]✅[/green] {label:<18} — {info['sessions']} sessions")
+            lines.append(f"  [green]available[/green] {label:<18} - {info['sessions']} sessions")
         else:
-            lines.append(f"  [dim]❌ {label:<18} — not installed[/dim]")
-
+            lines.append(f"  [dim]missing   {label:<18} - not installed[/dim]")
     console.print()
-    console.print(Panel(
-        "\n".join(lines),
-        title="[bold]AI Tools Detected[/bold]",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]CLI agents detected[/bold]",
+            border_style="blue",
+        )
+    )
 
 
 def run_setup_wizard() -> None:
-    """Run the interactive setup wizard."""
     console.print()
-    console.print(Panel(
-        "[bold blue]Welcome to AI Memory Vault[/bold blue]\n\n"
-        "This wizard will help you discover your AI history\n"
-        "and configure backups.",
-        border_style="blue",
-    ))
-
-    console.print("\n[bold]Scanning for AI tools...[/bold]\n")
+    console.print(
+        Panel(
+            "[bold blue]Welcome to AI Memory Vault[/bold blue]\n\n"
+            "This wizard discovers registered CLI agents and their local history.",
+            border_style="blue",
+        )
+    )
+    console.print("\n[bold]Scanning registered agents...[/bold]\n")
     tools = detect_tools()
     show_detection_panel(tools)
 
-    active = {k: v for k, v in tools.items() if v is not None}
+    active = {key: value for key, value in tools.items() if value is not None}
     if not active:
         console.print(
-            "\n[yellow]No AI tools found.[/yellow] "
-            "Install Claude Code or Codex CLI first, then run [bold]vault setup[/bold] again."
+            "\n[yellow]No registered agent data found.[/yellow] "
+            "Install or use a supported CLI agent, then run [bold]vault setup[/bold] again."
         )
         return
 
-    total_sessions = sum(v["sessions"] for v in active.values())
-    console.print(f"\nFound [bold green]{total_sessions}[/bold green] total sessions across {len(active)} tool(s).")
-    console.print("\n[dim]Run [bold]vault summary[/bold] to see full statistics.[/dim]")
-    console.print("[dim]Run [bold]vault tree[/bold] to see sessions by project.[/dim]")
-    console.print("[dim]Run [bold]vault push --vault-repo <url>[/bold] to set up backup.[/dim]\n")
+    total_sessions = sum(value["sessions"] for value in active.values())
+    console.print(
+        f"\nFound [bold green]{total_sessions}[/bold green] sessions across "
+        f"{len(active)} registered agent(s)."
+    )
+    console.print("\n[dim]Run [bold]vault summary[/bold] for full statistics.[/dim]")
+    console.print("[dim]Run [bold]vault tree[/bold] to inspect sessions by project.[/dim]")
+    console.print(
+        "[dim]Run [bold]vault push --include-raw --vault-repo <url>[/bold] "
+        "to create a resumable backup.[/dim]\n"
+    )

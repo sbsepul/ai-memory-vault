@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from ..agents import AGENTS
 from ..application.export_service import sessions_to_json_ready
 from ..application.session_loader import SessionLoader
 from ..config import (
@@ -21,7 +22,6 @@ from ..config import (
     DEFAULT_OUTPUT_DIR,
     DEFAULT_SEARCH_DEPTH,
     DEFAULT_SEARCH_LIMIT,
-    SOURCE_COLORS,
 )
 from ..domain.project_tree import build_tree
 from ..infrastructure.exporters.markdown import export_sessions
@@ -38,7 +38,7 @@ loader = SessionLoader(console=console)
 SOURCE_OPTION = click.option(
     "--source",
     default="all",
-    type=click.Choice(["all", "claude", "codex"]),
+    type=click.Choice(AGENTS.choices()),
     show_default=True,
     help="Which tool's history to include.",
 )
@@ -54,9 +54,6 @@ def main() -> None:
 @SOURCE_OPTION
 def cmd_summary(source: str) -> None:
     sessions = loader.load(source)
-    claude_sessions = [session for session in sessions if session.source == "claude"]
-    codex_sessions = [session for session in sessions if session.source == "codex"]
-
     table = Table(title="AI Memory Vault — Summary", show_footer=False)
     table.add_column("Source", style="bold")
     table.add_column("Sessions", justify="right")
@@ -68,10 +65,10 @@ def cmd_summary(source: str) -> None:
         messages = sum(session.message_count for session in items)
         table.add_row(f"[{style}]{label}[/{style}]", str(len(items)), str(messages), str(projects))
 
-    if claude_sessions:
-        add_row(claude_sessions, "Claude Code", "blue")
-    if codex_sessions:
-        add_row(codex_sessions, "Codex", "green")
+    for adapter in AGENTS.select():
+        agent_sessions = [session for session in sessions if session.source == adapter.source]
+        if agent_sessions:
+            add_row(agent_sessions, adapter.label, adapter.color)
 
     total_messages = sum(session.message_count for session in sessions)
     total_projects = len({session.project_rel_path for session in sessions})
@@ -96,8 +93,9 @@ def cmd_tree(source: str) -> None:
     table = Table(title="AI Memory Vault — Project Tree", show_lines=True)
     table.add_column("Project (rel. to ~)", style="cyan")
     table.add_column("Git", justify="center")
-    table.add_column("Claude", justify="right")
-    table.add_column("Codex", justify="right")
+    active_sources = sorted({session.source for session in sessions})
+    for source in active_sources:
+        table.add_column(AGENTS.get(source).label, justify="right")
     table.add_column("Msgs", justify="right")
 
     all_paths = set(nodes.keys())
@@ -111,11 +109,13 @@ def cmd_tree(source: str) -> None:
             git_icon = ":card_index_dividers:"
         else:
             git_icon = ":x:"
-        claude = (
-            f"{node.claude_sessions}s / {node.claude_messages}m" if node.claude_sessions else "-"
-        )
-        codex = f"{node.codex_sessions}s / {node.codex_messages}m" if node.codex_sessions else "-"
-        table.add_row(path, git_icon, claude, codex, str(node.total_messages))
+        source_values = []
+        for source in active_sources:
+            stats = node.stats_for(source)
+            source_values.append(
+                f"{stats.sessions}s / {stats.messages}m" if stats.sessions else "-"
+            )
+        table.add_row(path, git_icon, *source_values, str(node.total_messages))
 
     console.print(table)
     total_sessions = sum(node.total_sessions for node in nodes.values())
@@ -149,7 +149,7 @@ def cmd_ls(source: str, project: str | None, limit: int) -> None:
     table.add_column("Msgs", justify="right")
 
     for session in sessions:
-        color = SOURCE_COLORS.get(session.source, "white")
+        color = AGENTS.color(session.source)
         table.add_row(
             fmt_ts(session.updated_at),
             f"[{color}]{session.source}[/{color}]",
@@ -193,7 +193,7 @@ def cmd_search(
     for hit in hits[:limit]:
         session = hit.session
         ts = fmt_ts(hit.message.timestamp, "%Y-%m-%d")
-        src_color = SOURCE_COLORS.get(session.source, "white")
+        src_color = AGENTS.color(session.source)
         role_color = "yellow" if hit.message.role == "user" else "white"
         header = (
             f"[{src_color}]{session.source}[/{src_color}]  "
@@ -278,7 +278,7 @@ def cmd_export(source: str, output: str, project: str | None, fmt: str, since: s
     "--include-raw",
     is_flag=True,
     default=False,
-    help="Also backup raw Claude JSONL files.",
+    help="Back up native Claude and Codex files for resumable restore.",
 )
 def cmd_push(
     source: str,
@@ -312,8 +312,8 @@ def cmd_push(
     console.print(f"[green]✓ Pushed:[/green] {message}")
     if include_raw:
         console.print(
-            "[dim]Raw Claude JSONL files included — use "
-            "[bold]vault pull --restore-claude[/bold] on the new machine.[/dim]"
+            "[dim]Native sessions included — use "
+            "[bold]vault pull --restore-raw[/bold] on the new machine.[/dim]"
         )
 
 
@@ -336,7 +336,25 @@ def cmd_push(
     "--restore-claude",
     is_flag=True,
     default=False,
-    help="Restore raw Claude JSONL files to ~/.claude/projects/.",
+    help="Restore only Claude sessions (legacy compatibility option).",
+)
+@click.option(
+    "--restore-codex",
+    is_flag=True,
+    default=False,
+    help="Restore native Codex sessions to ~/.codex/sessions/.",
+)
+@click.option(
+    "--restore-raw",
+    is_flag=True,
+    default=False,
+    help="Restore native sessions for every registered agent.",
+)
+@click.option(
+    "--restore-source",
+    multiple=True,
+    type=click.Choice(AGENTS.choices(include_all=False)),
+    help="Restore one registered agent source (repeatable).",
 )
 @click.option(
     "--clone-repos",
@@ -354,6 +372,9 @@ def cmd_pull(
     vault_repo: str | None,
     output: str,
     restore_claude: bool,
+    restore_codex: bool,
+    restore_raw: bool,
+    restore_source: tuple[str, ...],
     clone_repos: bool,
     dry_run: bool,
 ) -> None:
@@ -363,7 +384,10 @@ def cmd_pull(
             result = pull_from_vault(
                 vault_repo,
                 output_path,
+                restore_raw=restore_raw,
+                restore_sources=set(restore_source),
                 restore_claude=restore_claude,
+                restore_codex=restore_codex,
                 clone_repos=clone_repos,
                 dry_run=dry_run,
             )
@@ -380,32 +404,27 @@ def cmd_pull(
     elif not dry_run:
         console.print("[yellow]No Markdown exports found in vault (run vault push first).[/yellow]")
 
-    if restore_claude:
-        if not result.restored_sessions:
+    if restore_raw or restore_source or restore_claude or restore_codex:
+        if not result.restored_raw:
             console.print(
-                "[yellow]No raw Claude sessions found in vault. "
+                "[yellow]No new native sessions found in vault. "
                 "Re-run push with --include-raw first.[/yellow]"
             )
-            return
-
-        table = Table(
-            title=f"{'[dry-run] ' if dry_run else ''}Claude sessions restored",
-            show_lines=False,
-        )
-        table.add_column("Project (rel. to ~)", style="cyan")
-        table.add_column("→ ~/.claude/projects/ slug", style="dim")
-
-        seen_paths: set[str] = set()
-        for rel_path, slug in result.restored_sessions:
-            if rel_path not in seen_paths:
-                table.add_row(rel_path, slug)
-                seen_paths.add(rel_path)
-
-        console.print(table)
-        if not dry_run:
+        else:
+            table = Table(
+                title=f"{'[dry-run] ' if dry_run else ''}Native sessions restored",
+                show_lines=False,
+            )
+            table.add_column("Source", style="bold")
+            table.add_column("Project (rel. to ~)", style="cyan")
+            table.add_column("Destination", style="dim")
+            for item in result.restored_raw:
+                table.add_row(item.source, item.project_rel_path, item.destination)
+            console.print(table)
+        if result.restore_conflicts:
             console.print(
-                f"\n{prefix}[green]✓ {len(result.restored_sessions)} session files[/green] "
-                f"restored to [cyan]{Path.home() / '.claude' / 'projects'}[/cyan]"
+                f"[yellow]{result.restore_conflicts} existing session files differed and "
+                "were left untouched.[/yellow]"
             )
 
     if clone_repos:
@@ -429,9 +448,7 @@ def cmd_pull(
                 table.add_row(rel_path, remote_url)
             console.print(table)
             if not dry_run:
-                console.print(
-                    f"\n{prefix}[green]✓ {len(result.cloned_repos)} repos cloned[/green]"
-                )
+                console.print(f"\n{prefix}[green]✓ {len(result.cloned_repos)} repos cloned[/green]")
 
 
 @main.command("memories")

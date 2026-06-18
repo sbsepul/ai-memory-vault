@@ -6,10 +6,9 @@ from datetime import datetime, timezone
 
 from rich.console import Console
 
+from ..agents import AGENTS
 from ..config import HOME
 from ..domain.models import Session
-from ..infrastructure.extractors import claude as claude_extractor
-from ..infrastructure.extractors import codex as codex_extractor
 from ..resolver import apply_path_map, load_path_map
 
 
@@ -22,12 +21,9 @@ class SessionLoader:
     def load(self, source: str = "all", since: str | None = None) -> list[Session]:
         sessions: list[Session] = []
 
-        if source in ("claude", "all"):
-            with self.console.status("[bold blue]Reading Claude Code sessions…"):
-                sessions.extend(claude_extractor.extract_all())
-        if source in ("codex", "all"):
-            with self.console.status("[bold green]Reading Codex sessions…"):
-                sessions.extend(codex_extractor.extract_all())
+        for adapter in AGENTS.select([source]):
+            with self.console.status(f"[bold {adapter.color}]Reading {adapter.label} sessions…"):
+                sessions.extend(adapter.extract_sessions())
 
         sessions = self._apply_saved_path_map(sessions)
         sessions = self._resolve_to_git_root(sessions)

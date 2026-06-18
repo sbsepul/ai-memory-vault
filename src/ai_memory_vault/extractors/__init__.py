@@ -1,14 +1,12 @@
-"""Extractor registry.
+"""Legacy extractor classes.
 
-To add a new AI tool:
-  1. Create extractors/<tool>.py and subclass BaseExtractor
-  2. Append an instance to EXTRACTORS here
-
-The loader and CLI iterate EXTRACTORS — no other file needs to change.
+New integrations must implement ``agents.base.AgentAdapter`` and register in
+``agents.registry.AGENTS``. ``EXTRACTORS`` remains only for import compatibility.
 """
-from .models import BaseExtractor, Message, Session
+
 from .claude import ClaudeExtractor
 from .codex import CodexExtractor
+from .models import BaseExtractor, Message, Session
 
 EXTRACTORS: list[BaseExtractor] = [
     ClaudeExtractor(),

@@ -1,5 +1,7 @@
 """Shared data models and base extractor for all supported AI tools."""
+
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,9 +18,10 @@ class Message:
 @dataclass
 class Session:
     """Normalized session from any supported AI tool."""
+
     id: str
-    source: str                  # "claude", "codex", or any future tool slug
-    project_rel_path: str        # relative to $HOME, e.g. "work/my-company/backend"
+    source: str  # "claude", "codex", or any future tool slug
+    project_rel_path: str  # relative to $HOME, e.g. "work/my-company/backend"
     name: str
     started_at: datetime | None
     updated_at: datetime | None
@@ -34,10 +37,9 @@ class Session:
 class BaseExtractor(ABC):
     """Contract that every AI-tool extractor must satisfy.
 
-    To add support for a new tool (e.g. opencode, copilot-cli):
-      1. Create src/ai_memory_vault/extractors/<tool>.py
-      2. Subclass BaseExtractor and implement extract_all()
-      3. Register an instance in EXTRACTORS below
+    This contract is retained for compatibility. New tools should implement
+    ``agents.base.AgentAdapter`` so extraction and native sync are registered
+    together.
 
     extract_all() must return a list of Session objects with source set to
     the tool's slug string (e.g. "opencode").

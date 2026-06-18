@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..config import HOME
 from .models import Session
+
+
+@dataclass
+class SourceStats:
+    sessions: int = 0
+    messages: int = 0
 
 
 @dataclass
@@ -13,18 +19,18 @@ class ProjectNode:
     rel_path: str
     has_git: bool = False
     path_exists: bool = False
-    claude_sessions: int = 0
-    codex_sessions: int = 0
-    claude_messages: int = 0
-    codex_messages: int = 0
+    sources: dict[str, SourceStats] = field(default_factory=dict)
 
     @property
     def total_sessions(self) -> int:
-        return self.claude_sessions + self.codex_sessions
+        return sum(stats.sessions for stats in self.sources.values())
 
     @property
     def total_messages(self) -> int:
-        return self.claude_messages + self.codex_messages
+        return sum(stats.messages for stats in self.sources.values())
+
+    def stats_for(self, source: str) -> SourceStats:
+        return self.sources.get(source, SourceStats())
 
 
 def build_tree(sessions: list[Session]) -> dict[str, ProjectNode]:
@@ -41,11 +47,8 @@ def build_tree(sessions: list[Session]) -> dict[str, ProjectNode]:
             ),
         )
         node.has_git = node.has_git or session.has_git
-        if session.source == "claude":
-            node.claude_sessions += 1
-            node.claude_messages += session.message_count
-        else:
-            node.codex_sessions += 1
-            node.codex_messages += session.message_count
+        stats = node.sources.setdefault(session.source, SourceStats())
+        stats.sessions += 1
+        stats.messages += session.message_count
 
     return dict(sorted(nodes.items()))

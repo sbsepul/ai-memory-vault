@@ -1,34 +1,42 @@
 """ai-memory-vault CLI — vault <command>."""
+
 from __future__ import annotations
+
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import click
 from rich.console import Console
-from rich.table import Table
-from rich.text import Text
 from rich.panel import Panel
+from rich.table import Table
 
+from .agents import AGENTS
+from .application.session_loader import SessionLoader
 from .config import (
-    HOME, DEFAULT_OUTPUT_DIR, DEFAULT_SEARCH_DEPTH,
-    DEFAULT_LS_LIMIT, DEFAULT_SEARCH_LIMIT, DEFAULT_MEMORIES_LIMIT,
-    SOURCE_COLORS,
+    DEFAULT_LS_LIMIT,
+    DEFAULT_MEMORIES_LIMIT,
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_SEARCH_DEPTH,
+    DEFAULT_SEARCH_LIMIT,
+    HOME,
 )
-from .utils import fmt_ts
-from .extractors import claude as claude_ext
-from .extractors import codex as codex_ext
-from .extractors.codex_memory import extract_memories as extract_codex_memories
 from .exporters.markdown import export_sessions
-from .tree import build_tree
+from .extractors.codex_memory import extract_memories as extract_codex_memories
+from .resolver import (
+    apply_path_map,
+    load_path_map,
+    resolve_orphans,
+    save_path_map,
+)
 from .search import search as do_search
 from .status import build_status
-from .resolver import (
-    resolve_orphans, load_path_map, save_path_map, apply_path_map
-)
+from .tree import build_tree
+from .utils import fmt_ts
 
 console = Console()
+loader = SessionLoader(console=console)
 
 _HOME = HOME
 
@@ -44,60 +52,17 @@ def _apply_map_to_sessions(sessions, path_map: dict) -> list:
     return sessions
 
 
-def _resolve_to_git_root(sessions) -> list:
-    """Remap sessions that sit inside a git repo (but are not the root)
-    to the nearest ancestor directory that contains .git."""
-    for s in sessions:
-        if s.has_git:
-            continue
-        full = _HOME / s.project_rel_path
-        if not full.exists():
-            continue
-        current = full.parent
-        while current != _HOME and current != current.parent:
-            if (current / ".git").exists():
-                s.project_rel_path = str(current.relative_to(_HOME))
-                s.has_git = True
-                break
-            current = current.parent
-    return sessions
-
 SOURCE_OPTION = click.option(
-    "--source", default="all",
-    type=click.Choice(["all", "claude", "codex"]),
+    "--source",
+    default="all",
+    type=click.Choice(AGENTS.choices()),
     show_default=True,
     help="Which tool's history to include.",
 )
 
 
 def _load_sessions(source: str, since: str | None = None):
-    sessions = []
-    if source in ("claude", "all"):
-        with console.status("[bold blue]Reading Claude Code sessions…"):
-            sessions += claude_ext.extract_all()
-    if source in ("codex", "all"):
-        with console.status("[bold green]Reading Codex sessions…"):
-            sessions += codex_ext.extract_all()
-
-    # Apply saved path map so orphan paths resolve to canonical locations
-    path_map = load_path_map()
-    if path_map:
-        sessions = _apply_map_to_sessions(sessions, path_map)
-
-    # Remap sessions inside a git repo to the git root of that repo
-    sessions = _resolve_to_git_root(sessions)
-
-    if since:
-        try:
-            cutoff = datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
-            sessions = [
-                s for s in sessions
-                if s.updated_at and s.updated_at.replace(tzinfo=timezone.utc) >= cutoff
-            ]
-        except ValueError:
-            console.print(f"[yellow]Warning: invalid --since date '{since}', ignored.[/yellow]")
-
-    return sessions
+    return loader.load(source=source, since=since)
 
 
 @click.group()
@@ -108,14 +73,12 @@ def main():
 
 # ── summary ──────────────────────────────────────────────────────────────────
 
+
 @main.command("summary")
 @SOURCE_OPTION
 def cmd_summary(source: str):
     """Print total sessions, messages, and projects per source."""
     sessions = _load_sessions(source)
-    claude_s = [s for s in sessions if s.source == "claude"]
-    codex_s = [s for s in sessions if s.source == "codex"]
-
     table = Table(title="AI Memory Vault — Summary", show_footer=False)
     table.add_column("Source", style="bold")
     table.add_column("Sessions", justify="right")
@@ -127,20 +90,25 @@ def cmd_summary(source: str):
         msgs = sum(s.message_count for s in lst)
         table.add_row(f"[{style}]{label}[/{style}]", str(len(lst)), str(msgs), str(projects))
 
-    if claude_s:
-        _row(claude_s, "Claude Code", "blue")
-    if codex_s:
-        _row(codex_s, "Codex", "green")
+    for adapter in AGENTS.select():
+        agent_sessions = [session for session in sessions if session.source == adapter.source]
+        if agent_sessions:
+            _row(agent_sessions, adapter.label, adapter.color)
 
     total_msgs = sum(s.message_count for s in sessions)
     total_projs = len({s.project_rel_path for s in sessions})
-    table.add_row("[bold]Total[/bold]", f"[bold]{len(sessions)}[/bold]",
-                  f"[bold]{total_msgs}[/bold]", f"[bold]{total_projs}[/bold]")
+    table.add_row(
+        "[bold]Total[/bold]",
+        f"[bold]{len(sessions)}[/bold]",
+        f"[bold]{total_msgs}[/bold]",
+        f"[bold]{total_projs}[/bold]",
+    )
 
     console.print(table)
 
 
 # ── tree ──────────────────────────────────────────────────────────────────────
+
 
 @main.command("tree")
 @SOURCE_OPTION
@@ -156,8 +124,9 @@ def cmd_tree(source: str):
     table = Table(title="AI Memory Vault — Project Tree", show_lines=True)
     table.add_column("Project (rel. to ~)", style="cyan", no_wrap=False)
     table.add_column("Git", justify="center")
-    table.add_column("Claude", justify="right")
-    table.add_column("Codex", justify="right")
+    active_sources = sorted({session.source for session in sessions})
+    for source in active_sources:
+        table.add_column(AGENTS.get(source).label, justify="right")
     table.add_column("Msgs", justify="right")
 
     all_paths = set(nodes.keys())
@@ -166,29 +135,33 @@ def cmd_tree(source: str):
         if node.has_git:
             git_icon = ":white_check_mark:"
         elif node.path_exists and not is_parent:
-            git_icon = ":open_file_folder:"   # 📂 standalone dir, candidate for vault init
+            git_icon = ":open_file_folder:"  # 📂 standalone dir, candidate for vault init
         elif node.path_exists:
             git_icon = ":card_index_dividers:"  # 🗂️ parent dir, history only
         else:
             git_icon = ":x:"
-        claude_str = f"{node.claude_sessions}s / {node.claude_messages}m" if node.claude_sessions else "-"
-        codex_str = f"{node.codex_sessions}s / {node.codex_messages}m" if node.codex_sessions else "-"
-        table.add_row(path, git_icon, claude_str, codex_str, str(node.total_messages))
+        source_values = []
+        for source in active_sources:
+            stats = node.stats_for(source)
+            source_values.append(
+                f"{stats.sessions}s / {stats.messages}m" if stats.sessions else "-"
+            )
+        table.add_row(path, git_icon, *source_values, str(node.total_messages))
 
     console.print(table)
     total_sessions = sum(n.total_sessions for n in nodes.values())
-    console.print(
-        f"\n[bold]{len(nodes)} projects[/bold] · "
-        f"[bold]{total_sessions} sessions[/bold]"
-    )
+    console.print(f"\n[bold]{len(nodes)} projects[/bold] · [bold]{total_sessions} sessions[/bold]")
 
 
 # ── ls ────────────────────────────────────────────────────────────────────────
 
+
 @main.command("ls")
 @SOURCE_OPTION
 @click.option("--project", "-p", default=None, help="Filter by project path (partial match).")
-@click.option("--limit", "-n", default=DEFAULT_LS_LIMIT, show_default=True, help="Max sessions to show.")
+@click.option(
+    "--limit", "-n", default=DEFAULT_LS_LIMIT, show_default=True, help="Max sessions to show."
+)
 def cmd_ls(source: str, project: str | None, limit: int):
     """List sessions for a project, newest first."""
     sessions = _load_sessions(source)
@@ -212,7 +185,7 @@ def cmd_ls(source: str, project: str | None, limit: int):
 
     for s in sessions:
         ts = fmt_ts(s.updated_at)
-        src_color = SOURCE_COLORS.get(s.source, "white")
+        src_color = AGENTS.color(s.source)
         table.add_row(
             ts,
             f"[{src_color}]{s.source}[/{src_color}]",
@@ -225,6 +198,7 @@ def cmd_ls(source: str, project: str | None, limit: int):
 
 
 # ── search ────────────────────────────────────────────────────────────────────
+
 
 @main.command("search")
 @click.argument("query")
@@ -251,7 +225,7 @@ def cmd_search(query: str, source: str, project: str | None, limit: int, case_se
     for hit in hits:
         s = hit.session
         ts = fmt_ts(hit.message.timestamp, "%Y-%m-%d")
-        src_color = SOURCE_COLORS.get(s.source, "white")
+        src_color = AGENTS.color(s.source)
         role_color = "yellow" if hit.message.role == "user" else "white"
 
         header = (
@@ -261,25 +235,41 @@ def cmd_search(query: str, source: str, project: str | None, limit: int, case_se
             f"[{role_color}]{hit.message.role}[/{role_color}]"
         )
         # Highlight the query in the snippet
-        highlighted = hit.snippet.replace(
-            query, f"[bold yellow]{query}[/bold yellow]"
-        ) if not case_sensitive else hit.snippet.replace(
-            query, f"[bold yellow]{query}[/bold yellow]"
+        highlighted = (
+            hit.snippet.replace(query, f"[bold yellow]{query}[/bold yellow]")
+            if not case_sensitive
+            else hit.snippet.replace(query, f"[bold yellow]{query}[/bold yellow]")
         )
         console.print(Panel(highlighted, title=header, title_align="left", padding=(0, 1)))
 
 
 # ── export ────────────────────────────────────────────────────────────────────
 
+
 @main.command("export")
 @SOURCE_OPTION
-@click.option("--output", "-o", default=str(DEFAULT_OUTPUT_DIR), show_default=True,
-              type=click.Path(), help="Output directory.")
+@click.option(
+    "--output",
+    "-o",
+    default=str(DEFAULT_OUTPUT_DIR),
+    show_default=True,
+    type=click.Path(),
+    help="Output directory.",
+)
 @click.option("--project", "-p", default=None, help="Filter by project path (partial match).")
-@click.option("--format", "fmt", default="markdown",
-              type=click.Choice(["markdown", "json"]), show_default=True)
-@click.option("--since", default=None, metavar="DATE",
-              help="Only export sessions updated after DATE (ISO format, e.g. 2026-01-01).")
+@click.option(
+    "--format",
+    "fmt",
+    default="markdown",
+    type=click.Choice(["markdown", "json"]),
+    show_default=True,
+)
+@click.option(
+    "--since",
+    default=None,
+    metavar="DATE",
+    help="Only export sessions updated after DATE (ISO format, e.g. 2026-01-01).",
+)
 def cmd_export(source: str, output: str, project: str | None, fmt: str, since: str | None):
     """Export conversation history to Markdown or JSON files."""
     sessions = _load_sessions(source, since=since)
@@ -329,17 +319,38 @@ def cmd_export(source: str, output: str, project: str | None, fmt: str, since: s
 
 # ── push ─────────────────────────────────────────────────────────────────────
 
+
 @main.command("push")
 @SOURCE_OPTION
-@click.option("--vault-repo", default=None, metavar="URL",
-              help="Private git repo URL (saved after first use).")
-@click.option("--output", "-o", default=str(DEFAULT_OUTPUT_DIR), show_default=True,
-              type=click.Path(), help="Local export directory to commit.")
-@click.option("--since", default=None, metavar="DATE",
-              help="Only export sessions updated after DATE before pushing.")
-@click.option("--include-raw", is_flag=True, default=False,
-              help="Also backup raw Claude JSONL files (enables full restore on another machine).")
-def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None, include_raw: bool):
+@click.option(
+    "--vault-repo",
+    default=None,
+    metavar="URL",
+    help="Private git repo URL (saved after first use).",
+)
+@click.option(
+    "--output",
+    "-o",
+    default=str(DEFAULT_OUTPUT_DIR),
+    show_default=True,
+    type=click.Path(),
+    help="Local export directory to commit.",
+)
+@click.option(
+    "--since",
+    default=None,
+    metavar="DATE",
+    help="Only export sessions updated after DATE before pushing.",
+)
+@click.option(
+    "--include-raw",
+    is_flag=True,
+    default=False,
+    help="Back up native Claude and Codex files for resumable restore.",
+)
+def cmd_push(
+    source: str, vault_repo: str | None, output: str, since: str | None, include_raw: bool
+):
     """Export sessions and push them to a private git repository."""
     from .sync.git import push_to_vault
 
@@ -361,8 +372,8 @@ def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None
                 console.print(f"[green]✓ Pushed:[/green] {msg}")
                 if include_raw:
                     console.print(
-                        "[dim]Raw Claude JSONL files included — "
-                        "use [bold]vault pull --restore-claude[/bold] on the new machine.[/dim]"
+                        "[dim]Native Claude and Codex sessions included. Use "
+                        "[bold]vault pull --restore-raw[/bold] on the new machine.[/dim]"
                     )
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
@@ -371,29 +382,79 @@ def cmd_push(source: str, vault_repo: str | None, output: str, since: str | None
 
 # ── pull ─────────────────────────────────────────────────────────────────────
 
+
 @main.command("pull")
-@click.option("--vault-repo", default=None, metavar="URL",
-              help="Private git repo URL (saved after first use).")
-@click.option("--output", "-o", default=str(DEFAULT_OUTPUT_DIR), show_default=True,
-              type=click.Path(), help="Where to place the downloaded export files.")
-@click.option("--restore-claude", is_flag=True, default=False,
-              help=(
-                  "Restore raw Claude JSONL files to ~/.claude/projects/, "
-                  "re-encoding paths for this machine. "
-                  "Requires a prior push with --include-raw."
-              ))
-@click.option("--clone-repos", is_flag=True, default=False,
-              help="Clone associated GitHub repos that don't exist on this machine.")
-@click.option("--dry-run", is_flag=True, default=False,
-              help="Show what would be restored/cloned without writing anything.")
-def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, clone_repos: bool, dry_run: bool):
+@click.option(
+    "--vault-repo",
+    default=None,
+    metavar="URL",
+    help="Private git repo URL (saved after first use).",
+)
+@click.option(
+    "--output",
+    "-o",
+    default=str(DEFAULT_OUTPUT_DIR),
+    show_default=True,
+    type=click.Path(),
+    help="Where to place the downloaded export files.",
+)
+@click.option(
+    "--restore-claude",
+    is_flag=True,
+    default=False,
+    help=(
+        "Restore raw Claude JSONL files to ~/.claude/projects/, "
+        "re-encoding paths for this machine. Kept for compatibility."
+    ),
+)
+@click.option(
+    "--restore-codex",
+    is_flag=True,
+    default=False,
+    help="Restore native Codex sessions to ~/.codex/sessions/.",
+)
+@click.option(
+    "--restore-raw",
+    is_flag=True,
+    default=False,
+    help="Restore native sessions for every registered agent.",
+)
+@click.option(
+    "--restore-source",
+    multiple=True,
+    type=click.Choice(AGENTS.choices(include_all=False)),
+    help="Restore one registered agent source (repeatable).",
+)
+@click.option(
+    "--clone-repos",
+    is_flag=True,
+    default=False,
+    help="Clone associated GitHub repos that don't exist on this machine.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show what would be restored/cloned without writing anything.",
+)
+def cmd_pull(
+    vault_repo: str | None,
+    output: str,
+    restore_claude: bool,
+    restore_codex: bool,
+    restore_raw: bool,
+    restore_source: tuple[str, ...],
+    clone_repos: bool,
+    dry_run: bool,
+):
     """Pull conversation history from the vault repo to this machine.
 
     \b
     Two modes:
       Default          — downloads Markdown exports for browsing (always works).
-      --restore-claude — also restores Claude Code sessions so Claude can load
-                         them natively. Requires a prior push with --include-raw.
+      --restore-raw    — restores sessions for every registered agent.
+      --restore-claude — restores only Claude sessions (legacy alias).
+      --restore-codex  — restores only Codex sessions.
       --clone-repos    — clones associated GitHub repos that don't exist locally.
 
     \b
@@ -401,8 +462,9 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, clone_re
     are restored to /home/bob/repos/project on the new machine, because vault
     stores only the relative path (repos/project).
     """
-    from .sync.git import pull_from_vault
     from rich.table import Table
+
+    from .sync.git import pull_from_vault
 
     output_path = Path(output)
 
@@ -411,7 +473,10 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, clone_re
             result = pull_from_vault(
                 vault_repo,
                 output_path,
+                restore_raw=restore_raw,
+                restore_sources=set(restore_source),
                 restore_claude=restore_claude,
+                restore_codex=restore_codex,
                 clone_repos=clone_repos,
                 dry_run=dry_run,
             )
@@ -428,43 +493,47 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, clone_re
             f"→ [cyan]{output_path}[/cyan]"
         )
     elif not dry_run:
-        console.print(
-            "[yellow]No Markdown exports found in vault "
-            "(run vault push first).[/yellow]"
-        )
+        console.print("[yellow]No Markdown exports found in vault (run vault push first).[/yellow]")
 
-    # ── claude restore ────────────────────────────────────────────────────────
-    if restore_claude:
-        if not result.restored_sessions:
+    # ── native restore ────────────────────────────────────────────────────────
+    if restore_raw or restore_source or restore_claude or restore_codex:
+        if not result.restored_raw:
             console.print(
-                "[yellow]No raw Claude sessions found in vault. "
+                "[yellow]No new native sessions found in vault. "
                 "Re-run push with --include-raw first.[/yellow]"
             )
         else:
-            home = Path.home()
-            claude_projects = home / ".claude" / "projects"
-
             table = Table(
-                title=f"{'[dry-run] ' if dry_run else ''}Claude sessions restored",
+                title=f"{'[dry-run] ' if dry_run else ''}Native sessions restored",
                 show_lines=False,
             )
+            table.add_column("Source", style="bold")
             table.add_column("Project (rel. to ~)", style="cyan")
-            table.add_column("→ ~/.claude/projects/ slug", style="dim")
+            table.add_column("Destination", style="dim")
 
-            seen_paths: set[str] = set()
-            for rel_path, slug in result.restored_sessions:
-                if rel_path not in seen_paths:
-                    table.add_row(rel_path, slug)
-                    seen_paths.add(rel_path)
+            for item in result.restored_raw:
+                table.add_row(item.source, item.project_rel_path, item.destination)
 
             console.print(table)
 
             if not dry_run:
-                console.print(
-                    f"\n{prefix}[green]✓ {len(result.restored_sessions)} session files[/green] "
-                    f"restored to [cyan]{claude_projects}[/cyan]\n"
-                    "[dim]Restart Claude Code to pick up the restored sessions.[/dim]"
+                counts: dict[str, int] = {}
+                for item in result.restored_raw:
+                    counts[item.source] = counts.get(item.source, 0) + 1
+                summary = ", ".join(
+                    f"{count} {AGENTS.get(source).label}"
+                    for source, count in sorted(counts.items())
                 )
+                console.print(
+                    f"\n{prefix}[green]✓ {summary} sessions restored[/green]\n"
+                    "[dim]Restart the CLI, enter the matching project, and use /resume. "
+                    "Codex can also use `codex resume --all`.[/dim]"
+                )
+        if result.restore_conflicts:
+            console.print(
+                f"[yellow]{result.restore_conflicts} existing session files differed and "
+                "were left untouched.[/yellow]"
+            )
 
     # ── clone repos ───────────────────────────────────────────────────────────
     if clone_repos:
@@ -479,6 +548,7 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, clone_re
                 console.print("[dim]All repos already exist on this machine.[/dim]")
         else:
             from rich.table import Table as _Table
+
             table = _Table(
                 title=f"{'[dry-run] ' if dry_run else ''}Repos cloned",
                 show_lines=False,
@@ -489,17 +559,21 @@ def cmd_pull(vault_repo: str | None, output: str, restore_claude: bool, clone_re
                 table.add_row(rel_path, remote_url)
             console.print(table)
             if not dry_run:
-                console.print(
-                    f"\n{prefix}[green]✓ {len(result.cloned_repos)} repos cloned[/green]"
-                )
+                console.print(f"\n{prefix}[green]✓ {len(result.cloned_repos)} repos cloned[/green]")
 
 
 # ── memories ──────────────────────────────────────────────────────────────────
 
+
 @main.command("memories")
 @click.option("--project", "-p", default=None, help="Filter by project path (partial match).")
-@click.option("--output", "-o", default=None, type=click.Path(),
-              help="Export memories to a Markdown file instead of printing.")
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    type=click.Path(),
+    help="Export memories to a Markdown file instead of printing.",
+)
 @click.option("--limit", "-n", default=DEFAULT_MEMORIES_LIMIT, show_default=True)
 def cmd_memories(project: str | None, output: str | None, limit: int):
     """Show Codex auto-generated memory summaries (from ~/.codex/memories_1.sqlite).
@@ -553,16 +627,29 @@ def cmd_memories(project: str | None, output: str | None, limit: int):
 
 # ── status ────────────────────────────────────────────────────────────────────
 
+
 @main.command("status")
 @SOURCE_OPTION
-@click.option("--search-dir", "-d", multiple=True, type=click.Path(),
-              help="Extra directories to scan for git repos (repeatable). "
-                   "Defaults to ~/repos and ~/work.")
-@click.option("--depth", default=DEFAULT_SEARCH_DEPTH, show_default=True,
-              help="Max directory depth when scanning for git repos.")
-@click.option("--resolve", is_flag=True, default=False,
-              help="Auto-detect orphan→canonical path mappings and save them. "
-                   "After running, all commands will use the resolved paths.")
+@click.option(
+    "--search-dir",
+    "-d",
+    multiple=True,
+    type=click.Path(),
+    help="Extra directories to scan for git repos (repeatable). Defaults to ~/repos and ~/work.",
+)
+@click.option(
+    "--depth",
+    default=DEFAULT_SEARCH_DEPTH,
+    show_default=True,
+    help="Max directory depth when scanning for git repos.",
+)
+@click.option(
+    "--resolve",
+    is_flag=True,
+    default=False,
+    help="Auto-detect orphan→canonical path mappings and save them. "
+    "After running, all commands will use the resolved paths.",
+)
 def cmd_status(source: str, search_dir: tuple, depth: int, resolve: bool):
     """Cross-reference git repos on disk against AI conversation history.
 
@@ -619,18 +706,19 @@ def cmd_status(source: str, search_dir: tuple, depth: int, resolve: bool):
     summary = Table.grid(padding=(0, 2))
     summary.add_column(style="bold")
     summary.add_column(justify="right", style="bold")
-    summary.add_row("Git repos on disk",                   str(len(report.disk_repos)))
-    summary.add_row("Projects with AI history",            str(len(report.ai_paths)))
-    summary.add_row("[green]✅ repo + history[/green]",    f"[green]{len(report.with_history)}[/green]")
-    summary.add_row("[red]❌ repo, no history[/red]",      f"[red]{len(report.no_history)}[/red]")
-    summary.add_row("[cyan]📂 files, no git[/cyan]",       f"[cyan]{len(exists_no_git)}[/cyan]")
+    summary.add_row("Git repos on disk", str(len(report.disk_repos)))
+    summary.add_row("Projects with AI history", str(len(report.ai_paths)))
+    summary.add_row(
+        "[green]✅ repo + history[/green]", f"[green]{len(report.with_history)}[/green]"
+    )
+    summary.add_row("[red]❌ repo, no history[/red]", f"[red]{len(report.no_history)}[/red]")
+    summary.add_row("[cyan]📂 files, no git[/cyan]", f"[cyan]{len(exists_no_git)}[/cyan]")
     summary.add_row("[yellow]👻 history, dir gone[/yellow]", f"[yellow]{len(missing)}[/yellow]")
     console.print(Panel(summary, title="vault status", padding=(0, 2)))
 
     # ── repos WITH history ────────────────────────────────────────────────────
     if report.with_history:
-        t = Table(title=f"✅ Repos with AI history ({len(report.with_history)})",
-                  show_lines=False)
+        t = Table(title=f"✅ Repos with AI history ({len(report.with_history)})", show_lines=False)
         t.add_column("Project (rel. to ~)", style="cyan")
         t.add_column("Sessions", justify="right")
         t.add_column("Messages", justify="right")
@@ -642,8 +730,7 @@ def cmd_status(source: str, search_dir: tuple, depth: int, resolve: bool):
 
     # ── repos WITHOUT history ─────────────────────────────────────────────────
     if report.no_history:
-        t = Table(title=f"❌ Repos with NO AI history ({len(report.no_history)})",
-                  show_lines=False)
+        t = Table(title=f"❌ Repos with NO AI history ({len(report.no_history)})", show_lines=False)
         t.add_column("Project (rel. to ~)", style="dim")
         for path in sorted(report.no_history):
             t.add_row(path)
@@ -687,13 +774,26 @@ def cmd_status(source: str, search_dir: tuple, depth: int, resolve: bool):
 
 # ── init ──────────────────────────────────────────────────────────────────────
 
+
 @main.command("init")
-@click.option("--project", "-p", required=True,
-              help="Project path relative to ~ (e.g. 'Downloads/Health Family').")
-@click.option("--remote/--no-remote", default=True, show_default=True,
-              help="Create a GitHub repository with 'gh repo create'.")
-@click.option("--private/--public", default=True, show_default=True,
-              help="GitHub repo visibility (only applies when --remote is set).")
+@click.option(
+    "--project",
+    "-p",
+    required=True,
+    help="Project path relative to ~ (e.g. 'Downloads/Health Family').",
+)
+@click.option(
+    "--remote/--no-remote",
+    default=True,
+    show_default=True,
+    help="Create a GitHub repository with 'gh repo create'.",
+)
+@click.option(
+    "--private/--public",
+    default=True,
+    show_default=True,
+    help="GitHub repo visibility (only applies when --remote is set).",
+)
 def cmd_init(project: str, remote: bool, private: bool):
     """Initialize a git repo for a directory that has AI history but no git.
 
@@ -726,8 +826,7 @@ def cmd_init(project: str, remote: bool, private: bool):
     run(["git", "init", "-b", "main"])
     run(["git", "add", "-A"])
 
-    result = sp.run(["git", "status", "--short"], cwd=project_path,
-                    capture_output=True, text=True)
+    result = sp.run(["git", "status", "--short"], cwd=project_path, capture_output=True, text=True)
     if result.stdout.strip():
         run(["git", "commit", "-m", "initial commit"])
         console.print("[green]✓ Initial commit created[/green]")
@@ -765,32 +864,36 @@ def cmd_init(project: str, remote: bool, private: bool):
 @main.command()
 @click.option("--port", default=8080, show_default=True, help="Port to listen on.")
 @click.option("--host", default="127.0.0.1", show_default=True, help="Host to bind to.")
-@click.option("--no-browser", is_flag=True, default=False, help="Skip opening browser automatically.")
+@click.option(
+    "--no-browser", is_flag=True, default=False, help="Skip opening browser automatically."
+)
 def serve(port, host, no_browser):
     """Launch local web UI for browsing AI history."""
     try:
         import uvicorn
     except ImportError:
         console.print(
-            "[red]uvicorn is required for vault serve.[/red]\n"
-            "Install with:  pip install uvicorn"
+            "[red]uvicorn is required for vault serve.[/red]\nInstall with:  pip install uvicorn"
         )
         sys.exit(1)
 
     from .server.app import app as web_app
 
     url = f"http://{host}:{port}"
-    console.print(Panel(
-        f"[bold]AI Memory Vault — Web UI[/bold]\n\n"
-        f"[dim]Open:[/dim] [link={url}][blue]{url}[/blue][/link]\n\n"
-        f"Press [bold]Ctrl+C[/bold] to stop.",
-        border_style="blue",
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold]AI Memory Vault — Web UI[/bold]\n\n"
+            f"[dim]Open:[/dim] [link={url}][blue]{url}[/blue][/link]\n\n"
+            f"Press [bold]Ctrl+C[/bold] to stop.",
+            border_style="blue",
+            expand=False,
+        )
+    )
 
     if not no_browser:
         import threading
         import webbrowser
+
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
     uvicorn.run(web_app, host=host, port=port, log_level="warning")
