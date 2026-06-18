@@ -175,8 +175,34 @@ vault memories --project my-project
 ```bash
 vault export --format markdown
 vault push --include-raw
-vault pull --restore-claude
+vault pull --restore-raw
 ```
+
+`--include-raw` stores each registered agent's native session files, not just
+Markdown exports. `--restore-raw` restores those files to the locations used by
+the agent's native resume command. To restore one integration only:
+
+```bash
+vault pull --restore-source claude
+vault pull --restore-source codex
+```
+
+Legacy `--restore-claude` and `--restore-codex` flags remain supported.
+
+### Agent integrations
+
+Agent-specific behavior is isolated behind `AgentAdapter` implementations in
+`src/ai_memory_vault/agents/`. The central registry owns canonical names,
+aliases, display metadata, extraction, native backup, restore destinations, and
+optional auxiliary files.
+
+Adding another CLI agent requires:
+
+1. Implement `AgentAdapter`.
+2. Register it in `agents/registry.py`.
+
+The Git sync service, CLI source choices, summary, and project tree consume the
+registry and do not require agent-specific conditionals.
 
 ## Architecture
 
